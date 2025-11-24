@@ -1,4 +1,5 @@
 import type { Metadata } from "next"
+import { Suspense } from "react"
 import { AuthForm } from "@/components/auth/auth-form"
 
 export const metadata: Metadata = {
@@ -18,7 +19,9 @@ export default function LoginPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Iniciar Sesión</h1>
           <p className="text-sm text-muted-foreground mt-2">Ingrese sus credenciales para acceder al sistema</p>
         </div>
-        <AuthForm mode="login" />
+        <Suspense fallback={<div className="text-center">Cargando...</div>}>
+          <AuthForm mode="login" />
+        </Suspense>
       </div>
     </div>
   )
