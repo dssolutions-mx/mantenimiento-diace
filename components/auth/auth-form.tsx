@@ -1,11 +1,11 @@
 "use client"
 
-import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useState, useEffect } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
-import { Eye, EyeOff, Loader2 } from "lucide-react"
+import { Eye, EyeOff, Loader2, CheckCircle2 } from "lucide-react"
 import Link from "next/link"
 
 import { Button } from "@/components/ui/button"
@@ -54,12 +54,26 @@ type RegisterFormValues = z.infer<typeof registerSchema>
 
 export function AuthForm({ mode = "login" }: { mode: "login" | "register" }) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
+  const [showRegistrationSuccess, setShowRegistrationSuccess] = useState(false)
   
   // Use Zustand store for authentication
   const { signIn } = useAuthZustand()
+
+  // Check for registration success message
+  useEffect(() => {
+    if (mode === "login" && searchParams.get('registered') === 'true') {
+      setShowRegistrationSuccess(true)
+      // Clear the query parameter from URL
+      router.replace('/login', { scroll: false })
+      // Hide message after 5 seconds
+      const timer = setTimeout(() => setShowRegistrationSuccess(false), 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [mode, searchParams, router])
 
   const schema = mode === "login" ? loginSchema : registerSchema
 
@@ -100,8 +114,46 @@ export function AuthForm({ mode = "login" }: { mode: "login" | "register" }) {
         router.refresh()
         router.push("/dashboard")
       } else {
-        // Registration disabled
-        throw new Error('El registro público está deshabilitado. Contacte al administrador.')
+        // Registration enabled - call API endpoint
+        const registerValues = values as RegisterFormValues
+        console.log('📝 Attempting registration...')
+        
+        // Prepare emergency contact data
+        const hasEmergencyContact = 
+          (registerValues.emergency_contact_name && registerValues.emergency_contact_name.trim()) ||
+          (registerValues.emergency_contact_phone && registerValues.emergency_contact_phone.trim())
+        
+        const emergencyContact = hasEmergencyContact ? {
+          name: registerValues.emergency_contact_name?.trim() || undefined,
+          phone: registerValues.emergency_contact_phone?.trim() || undefined,
+        } : undefined
+
+        const response = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            nombre: registerValues.nombre,
+            apellido: registerValues.apellido,
+            email: registerValues.email,
+            role: registerValues.role,
+            telefono: registerValues.telefono?.trim() || undefined,
+            emergency_contact: emergencyContact,
+            password: registerValues.password,
+          }),
+        })
+
+        const data = await response.json()
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Registration failed')
+        }
+
+        console.log('✅ Registration successful, email confirmation sent')
+        // Show success message and redirect to login
+        setError(null)
+        router.push('/login?registered=true')
       }
     } catch (error: any) {
       console.error(`❌ ${mode === 'login' ? 'Login' : 'Registration'} error:`, error)
@@ -114,24 +166,195 @@ export function AuthForm({ mode = "login" }: { mode: "login" | "register" }) {
   return (
     <Card className="w-full">
       <CardHeader>
-        <CardTitle>{mode === "login" ? "Iniciar Sesión" : "Registro deshabilitado"}</CardTitle>
+        <CardTitle>{mode === "login" ? "Iniciar Sesión" : "Crear Cuenta"}</CardTitle>
         <CardDescription>
           {mode === "login"
             ? "Ingrese sus credenciales para acceder al sistema"
-            : "El registro público está deshabilitado. Contacte al administrador."}
+            : "Complete el formulario para crear una cuenta. Se enviará un correo de confirmación."}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             {mode === "register" && (
-              <Alert variant="destructive">
-                <AlertDescription>
-                  El registro público está deshabilitado. Contacte al administrador.
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="nombre"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Nombre *</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Juan" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="apellido"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Apellido *</FormLabel>
+                        <FormControl>
+                          <Input placeholder="Pérez" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <FormField
+                  control={form.control}
+                  name="email"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Correo electrónico *</FormLabel>
+                      <FormControl>
+                        <Input type="email" placeholder="correo@ejemplo.com" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="role"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Rol *</FormLabel>
+                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Seleccione un rol" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {USER_ROLES.map((role) => (
+                            <SelectItem key={role.value} value={role.value}>
+                              {role.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="telefono"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Teléfono</FormLabel>
+                      <FormControl>
+                        <Input type="tel" placeholder="+52 123 456 7890" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Contacto de Emergencia (Opcional)</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FormField
+                      control={form.control}
+                      name="emergency_contact_name"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Nombre</FormLabel>
+                          <FormControl>
+                            <Input placeholder="Nombre del contacto" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name="emergency_contact_phone"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Teléfono</FormLabel>
+                          <FormControl>
+                            <Input type="tel" placeholder="+52 123 456 7890" {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                </div>
+
+                <FormField
+                  control={form.control}
+                  name="password"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Contraseña *</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <Input type={showPassword ? "text" : "password"} placeholder="••••••••" {...field} />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="absolute right-0 top-0 h-full px-3"
+                            onClick={() => setShowPassword(!showPassword)}
+                          >
+                            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                          </Button>
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="passwordConfirm"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Confirmar Contraseña *</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <Input type={showPassword ? "text" : "password"} placeholder="••••••••" {...field} />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="absolute right-0 top-0 h-full px-3"
+                            onClick={() => setShowPassword(!showPassword)}
+                          >
+                            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                          </Button>
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </>
+            )}
+
+            {mode === "login" && showRegistrationSuccess && (
+              <Alert className="border-green-500 bg-green-50">
+                <CheckCircle2 className="h-4 w-4 text-green-600" />
+                <AlertDescription className="text-green-800">
+                  Registro exitoso. Por favor revise su correo electrónico para confirmar su cuenta.
                 </AlertDescription>
               </Alert>
             )}
 
+            {mode === "login" && (
+              <>
             <FormField
               control={form.control}
               name="email"
@@ -171,7 +394,6 @@ export function AuthForm({ mode = "login" }: { mode: "login" | "register" }) {
               )}
             />
 
-            {mode === "login" && (
               <div className="text-right">
                 <Link
                   href="/forgot-password"
@@ -180,9 +402,8 @@ export function AuthForm({ mode = "login" }: { mode: "login" | "register" }) {
                   ¿Olvidó su contraseña?
                 </Link>
               </div>
+              </>
             )}
-
-            {mode === "register" && null}
 
             {error && (
               <Alert variant="destructive">
@@ -190,7 +411,7 @@ export function AuthForm({ mode = "login" }: { mode: "login" | "register" }) {
               </Alert>
             )}
 
-            <Button type="submit" className="w-full" disabled={isLoading || mode === 'register'}>
+            <Button type="submit" className="w-full" disabled={isLoading}>
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -199,7 +420,7 @@ export function AuthForm({ mode = "login" }: { mode: "login" | "register" }) {
               ) : mode === "login" ? (
                 "Iniciar Sesión"
               ) : (
-                "Registro deshabilitado"
+                "Crear Cuenta"
               )}
             </Button>
           </form>
@@ -208,14 +429,17 @@ export function AuthForm({ mode = "login" }: { mode: "login" | "register" }) {
       <CardFooter className="flex justify-center">
         {mode === "login" ? (
           <p className="text-sm text-muted-foreground">
-            ¿Necesita una cuenta? Contacte al administrador.
+            ¿Necesita una cuenta?{" "}
+            <Link href="/register" className="text-primary hover:underline">
+              Regístrese aquí
+            </Link>
           </p>
         ) : (
           <p className="text-sm text-muted-foreground">
             ¿Ya tiene una cuenta?{" "}
-            <Button variant="link" className="p-0" onClick={() => router.push("/login")}>
+            <Link href="/login" className="text-primary hover:underline">
               Iniciar Sesión
-            </Button>
+            </Link>
           </p>
         )}
       </CardFooter>

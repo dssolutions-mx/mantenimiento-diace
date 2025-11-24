@@ -2,15 +2,6 @@ import { createClient } from '@/lib/supabase-server'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(request: NextRequest) {
-  // Disable public registration at API level
-  console.log('🛑 Registration endpoint is disabled')
-  const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || ''
-  return NextResponse.json({
-    error: 'Public registration is disabled',
-    host,
-  }, { status: 403 })
-
-  // The code below is preserved for potential future re-enable
   try {
     const body = await request.json()
     console.log('📝 Request body received:', { ...body, password: '[HIDDEN]' })
@@ -67,15 +58,22 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
+    // Get the origin for redirect URL
+    const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || ''
+    const protocol = request.headers.get('x-forwarded-proto') || 'https'
+    const origin = `${protocol}://${host}`
+    const redirectTo = `${origin}/auth/confirm?type=signup`
+
     // Use regular client for signup
     console.log('👤 Creating user with standard signup...')
     const supabase = await createClient()
 
-    // Sign up user - this will trigger our profile creation automatically
+    // Sign up user - this will trigger email confirmation
     const { data: authData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
+        emailRedirectTo: redirectTo,
         data: {
           nombre,
           apellido,
