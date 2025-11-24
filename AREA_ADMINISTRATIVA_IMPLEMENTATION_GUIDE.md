@@ -2,7 +2,7 @@
 
 ## 📋 RESUMEN EJECUTIVO
 
-Esta guía documenta la implementación completa del sistema de protección de roles en el frontend del Maintenance Dashboard, utilizando **AREA_ADMINISTRATIVA** como caso de estudio y precedente para los demás roles.
+Esta guía documenta la implementación completa del sistema de protección de roles en el frdsfdsfdsontend del Maintenance Dashboard, utilizando **AREA_ADMINISTRATIVA** como caso de estudio y precedente para los demás roles.
 
 ### Objetivo Alcanzado
 - ✅ Sistema de protección de roles funcional al 100%
