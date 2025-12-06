@@ -1,7 +1,7 @@
 import { createServerClient } from "@supabase/ssr"
 import { NextResponse, type NextRequest } from "next/server"
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
     request,
   })
@@ -53,25 +53,25 @@ export async function middleware(request: NextRequest) {
     
     if (firstAttempt.data.user) {
       user = firstAttempt.data.user
-      console.log('✅ Middleware: User authenticated via Supabase:', user?.email || user?.id || 'unknown')
+      console.log('✅ Proxy: User authenticated via Supabase:', user?.email || user?.id || 'unknown')
     } else if (firstAttempt.error?.message?.includes('Auth session missing')) {
-      console.log('🔄 Middleware: Mobile session recovery - attempting session refresh')
+      console.log('🔄 Proxy: Mobile session recovery - attempting session refresh')
       
       // Try to refresh session for mobile devices
       const { data: { session }, error: sessionError } = await supabase.auth.getSession()
       if (session?.user && !sessionError) {
-        console.log('✅ Middleware: Mobile session recovery successful')
+        console.log('✅ Proxy: Mobile session recovery successful')
         user = session.user
       } else {
-        console.log('❌ Middleware: Mobile session recovery failed, checking offline mode')
+        console.log('❌ Proxy: Mobile session recovery failed, checking offline mode')
         throw new Error('Session refresh failed')
       }
     } else {
-      console.log('🔍 Middleware: Supabase auth failed:', firstAttempt.error?.message)
+      console.log('🔍 Proxy: Supabase auth failed:', firstAttempt.error?.message)
       throw firstAttempt.error || new Error('Authentication failed')
     }
   } catch (error: any) {
-    console.log('🌐 Middleware: Auth failed, evaluating controlled offline access')
+    console.log('🌐 Proxy: Auth failed, evaluating controlled offline access')
 
     // Define work routes that can operate in offline mode
     const offlineWorkRoutes = [
@@ -102,7 +102,7 @@ export async function middleware(request: NextRequest) {
       )
 
       if (supabaseCookies.length > 0) {
-        console.log('🔑 Middleware: Session cookies present — enabling offline work mode')
+        console.log('🔑 Proxy: Session cookies present — enabling offline work mode')
         user = {
           id: 'offline-session',
           email: 'offline@session.local',
@@ -113,10 +113,10 @@ export async function middleware(request: NextRequest) {
         supabaseResponse.headers.set('X-Offline-Mode', 'true')
         supabaseResponse.headers.set('X-Auth-Required', 'true')
       } else {
-        console.log('🛑 Middleware: No Supabase cookies — not enabling offline bypass')
+        console.log('🛑 Proxy: No Supabase cookies — not enabling offline bypass')
       }
     } else {
-      console.log('🔒 Middleware: Non-work route, requiring proper authentication')
+      console.log('🔒 Proxy: Non-work route, requiring proper authentication')
     }
   }
 
@@ -124,7 +124,7 @@ export async function middleware(request: NextRequest) {
   if (request.nextUrl.pathname === "/") {
     const url = request.nextUrl.clone()
     url.pathname = user ? "/dashboard" : "/login"
-    console.log(`🔄 Middleware: Root redirect to ${url.pathname} ${isOfflineMode ? '(offline)' : '(online)'}`)
+    console.log(`🔄 Proxy: Root redirect to ${url.pathname} ${isOfflineMode ? '(offline)' : '(online)'}`)
     return NextResponse.redirect(url)
   }
 
@@ -150,7 +150,7 @@ export async function middleware(request: NextRequest) {
     const url = request.nextUrl.clone()
     url.pathname = "/login"
     url.searchParams.set("redirectedFrom", request.nextUrl.pathname)
-    console.log(`🔒 Middleware: Redirecting unauthenticated user from ${request.nextUrl.pathname} to login`)
+    console.log(`🔒 Proxy: Redirecting unauthenticated user from ${request.nextUrl.pathname} to login`)
     return NextResponse.redirect(url)
   }
 
@@ -159,17 +159,17 @@ export async function middleware(request: NextRequest) {
       (request.nextUrl.pathname === "/login" || request.nextUrl.pathname === "/register")) {
     const url = request.nextUrl.clone()
     url.pathname = "/dashboard"
-    console.log(`🏠 Middleware: Redirecting authenticated user from ${request.nextUrl.pathname} to dashboard ${isOfflineMode ? '(offline)' : '(online)'}`)
+    console.log(`🏠 Proxy: Redirecting authenticated user from ${request.nextUrl.pathname} to dashboard ${isOfflineMode ? '(offline)' : '(online)'}`)
     return NextResponse.redirect(url)
   }
 
   // Log successful middleware pass-through
   if (user) {
-    console.log(`✅ Middleware: Allowing authenticated access to ${request.nextUrl.pathname} ${isOfflineMode ? '(offline)' : '(online)'}`)
+    console.log(`✅ Proxy: Allowing authenticated access to ${request.nextUrl.pathname} ${isOfflineMode ? '(offline)' : '(online)'}`)
   } else if (isPublicRoute) {
-    console.log(`🌐 Middleware: Allowing public access to ${request.nextUrl.pathname}`)
+    console.log(`🌐 Proxy: Allowing public access to ${request.nextUrl.pathname}`)
   } else if (isApiRoute) {
-    console.log(`🔌 Middleware: Skipping auth for API route ${request.nextUrl.pathname}`)
+    console.log(`🔌 Proxy: Skipping auth for API route ${request.nextUrl.pathname}`)
   }
 
   // IMPORTANT: You must return the supabaseResponse object as it is.
