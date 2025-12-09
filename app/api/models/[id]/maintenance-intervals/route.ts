@@ -3,11 +3,11 @@ import { createClient } from '@/lib/supabase-server';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     // Obtener el ID del modelo de los parámetros de la ruta
-    const { id: modelId } = params;
+    const { id: modelId } = await params;
     console.log("Fetching maintenance intervals for model ID:", modelId);
     
     // Crear cliente de Supabase
