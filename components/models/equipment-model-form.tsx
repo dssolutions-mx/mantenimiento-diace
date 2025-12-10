@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef } from "react"
+import { useState, useRef, useMemo, useCallback, useEffect, memo } from "react"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -53,6 +53,106 @@ interface MaintenanceInterval {
   description: string
   tasks: MaintenanceTask[]
 }
+
+// Memoized component for part table row
+const PartTableRow = memo(({ 
+  part, 
+  onEdit, 
+  onDelete 
+}: { 
+  part: MaintenancePart
+  onEdit: () => void
+  onDelete: () => void
+}) => (
+  <TableRow>
+    <TableCell>{part.name}</TableCell>
+    <TableCell>{part.partNumber}</TableCell>
+    <TableCell>{part.quantity}</TableCell>
+    <TableCell>{part.cost ? `$${part.cost}` : "N/A"}</TableCell>
+    <TableCell>
+      <div className="flex gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0"
+          onClick={onEdit}
+        >
+          <Edit className="h-3 w-3" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0 text-red-500"
+          onClick={onDelete}
+        >
+          <Trash className="h-3 w-3" />
+        </Button>
+      </div>
+    </TableCell>
+  </TableRow>
+))
+PartTableRow.displayName = "PartTableRow"
+
+// Memoized component for task table row
+const TaskTableRow = memo(({ 
+  task, 
+  intervalIndex,
+  onEdit, 
+  onDelete,
+  onEditPart,
+  onDeletePart,
+  openPartDialog,
+  removePart,
+  maintenanceIntervals
+}: { 
+  task: MaintenanceTask
+  intervalIndex: number
+  onEdit: () => void
+  onDelete: () => void
+  onEditPart: (part: MaintenancePart) => void
+  onDeletePart: (partId: string) => void
+  openPartDialog: (intervalIndex: number, taskIndex: number, part: MaintenancePart | null) => void
+  removePart: (intervalIndex: number, taskIndex: number, partId: string) => void
+  maintenanceIntervals: MaintenanceInterval[]
+}) => {
+  const taskIndex = useMemo(() => 
+    maintenanceIntervals[intervalIndex]?.tasks.findIndex((t) => t.id === task.id) ?? -1,
+    [maintenanceIntervals, intervalIndex, task.id]
+  )
+  
+  return (
+    <div
+      key={task.id}
+      className="flex items-center justify-between text-xs border-l-2 border-primary pl-2"
+    >
+      <div className="flex-1">
+        <div className="font-medium">{task.description}</div>
+        <div className="text-muted-foreground">
+          {task.type} • {task.estimatedTime}h • {task.parts.length} repuestos
+        </div>
+      </div>
+      <div className="flex gap-1">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0"
+          onClick={onEdit}
+        >
+          <Edit className="h-3 w-3" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
+          onClick={onDelete}
+        >
+          <Trash className="h-3 w-3" />
+        </Button>
+      </div>
+    </div>
+  )
+})
+TaskTableRow.displayName = "TaskTableRow"
 
 export function EquipmentModelForm() {
   const router = useRouter()
@@ -133,15 +233,31 @@ export function EquipmentModelForm() {
   const [currentTaskIndex, setCurrentTaskIndex] = useState<number | null>(null)
   const [currentPart, setCurrentPart] = useState<MaintenancePart | null>(null)
   const [isEditingPart, setIsEditingPart] = useState(false)
+  
+  // Estado controlado para el formulario de repuestos
+  const [partFormData, setPartFormData] = useState<{
+    name: string
+    partNumber: string
+    quantity: number
+    cost: string
+  }>({ name: "", partNumber: "", quantity: 1, cost: "" })
+  
+  // Estado controlado para el formulario de tareas
+  const [taskFormData, setTaskFormData] = useState<{
+    description: string
+    type: string
+    estimatedTime: number
+    requiresSpecialist: boolean
+  }>({ description: "", type: "Inspección", estimatedTime: 1, requiresSpecialist: false })
 
   // Estado para la unidad de mantenimiento
   const [maintenanceUnit, setMaintenanceUnit] = useState<string>("hours")
 
   // Función para agregar un nuevo intervalo de mantenimiento
-  const addMaintenanceInterval = () => {
+  const addMaintenanceInterval = useCallback(() => {
     if (newInterval.hours > 0 && newInterval.name && newInterval.description) {
-      setMaintenanceIntervals([
-        ...maintenanceIntervals,
+      setMaintenanceIntervals((prevIntervals) => [
+        ...prevIntervals,
         {
           ...newInterval,
           tasks: [],
@@ -149,122 +265,233 @@ export function EquipmentModelForm() {
       ])
       setNewInterval({ hours: 0, name: "", description: "" })
     }
-  }
+  }, [newInterval])
 
   // Función para eliminar un intervalo de mantenimiento
-  const removeMaintenanceInterval = (index: number) => {
-    setMaintenanceIntervals(maintenanceIntervals.filter((_, i) => i !== index))
-  }
+  const removeMaintenanceInterval = useCallback((index: number) => {
+    setMaintenanceIntervals((prevIntervals) => prevIntervals.filter((_, i) => i !== index))
+  }, [])
 
   // Función para abrir el diálogo de tareas
-  const openTaskDialog = (intervalIndex: number, task: MaintenanceTask | null = null) => {
+  const openTaskDialog = useCallback((intervalIndex: number, task: MaintenanceTask | null = null) => {
     setCurrentIntervalIndex(intervalIndex)
     setCurrentTask(task)
     setIsEditingTask(!!task)
+    if (task) {
+      setTaskFormData({
+        description: task.description,
+        type: task.type,
+        estimatedTime: task.estimatedTime,
+        requiresSpecialist: task.requiresSpecialist,
+      })
+    } else {
+      setTaskFormData({ description: "", type: "Inspección", estimatedTime: 1, requiresSpecialist: false })
+    }
     setIsTaskDialogOpen(true)
-  }
+  }, [])
+  
+  // Reset task form when dialog closes
+  useEffect(() => {
+    if (!isTaskDialogOpen) {
+      setTaskFormData({ description: "", type: "Inspección", estimatedTime: 1, requiresSpecialist: false })
+      setCurrentTask(null)
+      setIsEditingTask(false)
+    }
+  }, [isTaskDialogOpen])
 
   // Función para guardar una tarea
-  const saveTask = (task: MaintenanceTask) => {
+  const saveTask = useCallback((task: MaintenanceTask) => {
     if (currentIntervalIndex === null) return
 
-    const updatedIntervals = [...maintenanceIntervals]
-
-    if (isEditingTask && currentTask) {
-      // Editar tarea existente
-      const taskIndex = updatedIntervals[currentIntervalIndex].tasks.findIndex((t) => t.id === currentTask.id)
-      if (taskIndex !== -1) {
-        updatedIntervals[currentIntervalIndex].tasks[taskIndex] = task
+    setMaintenanceIntervals((prevIntervals) => {
+      const updatedIntervals = [...prevIntervals]
+      const interval = updatedIntervals[currentIntervalIndex]
+      
+      if (isEditingTask && currentTask) {
+        // Editar tarea existente
+        const taskIndex = interval.tasks.findIndex((t) => t.id === currentTask.id)
+        if (taskIndex !== -1) {
+          updatedIntervals[currentIntervalIndex] = {
+            ...interval,
+            tasks: interval.tasks.map((t, idx) => idx === taskIndex ? task : t),
+          }
+        }
+      } else {
+        // Agregar nueva tarea
+        updatedIntervals[currentIntervalIndex] = {
+          ...interval,
+          tasks: [...interval.tasks, task],
+        }
       }
-    } else {
-      // Agregar nueva tarea
-      updatedIntervals[currentIntervalIndex].tasks.push(task)
-    }
-
-    setMaintenanceIntervals(updatedIntervals)
+      
+      return updatedIntervals
+    })
+    
     setIsTaskDialogOpen(false)
-    setCurrentTask(null)
-    setIsEditingTask(false)
-  }
+  }, [currentIntervalIndex, isEditingTask, currentTask])
 
   // Función para eliminar una tarea
-  const removeTask = (intervalIndex: number, taskId: string) => {
-    const updatedIntervals = [...maintenanceIntervals]
-    updatedIntervals[intervalIndex].tasks = updatedIntervals[intervalIndex].tasks.filter((task) => task.id !== taskId)
-    setMaintenanceIntervals(updatedIntervals)
-  }
+  const removeTask = useCallback((intervalIndex: number, taskId: string) => {
+    setMaintenanceIntervals((prevIntervals) => {
+      const updatedIntervals = [...prevIntervals]
+      const interval = updatedIntervals[intervalIndex]
+      updatedIntervals[intervalIndex] = {
+        ...interval,
+        tasks: interval.tasks.filter((task) => task.id !== taskId),
+      }
+      return updatedIntervals
+    })
+  }, [])
 
   // Función para abrir el diálogo de repuestos
-  const openPartDialog = (intervalIndex: number, taskIndex: number, part: MaintenancePart | null = null) => {
+  const openPartDialog = useCallback((intervalIndex: number, taskIndex: number, part: MaintenancePart | null = null) => {
     setCurrentIntervalIndex(intervalIndex)
     setCurrentTaskIndex(taskIndex)
     setCurrentPart(part)
     setIsEditingPart(!!part)
+    if (part) {
+      setPartFormData({
+        name: part.name,
+        partNumber: part.partNumber,
+        quantity: part.quantity,
+        cost: part.cost || "",
+      })
+    } else {
+      setPartFormData({ name: "", partNumber: "", quantity: 1, cost: "" })
+    }
     setIsPartDialogOpen(true)
-  }
+  }, [])
+  
+  // Reset part form when dialog closes
+  useEffect(() => {
+    if (!isPartDialogOpen) {
+      setPartFormData({ name: "", partNumber: "", quantity: 1, cost: "" })
+      setCurrentPart(null)
+      setIsEditingPart(false)
+    }
+  }, [isPartDialogOpen])
+  
+  // Sync part form data when currentPart changes
+  useEffect(() => {
+    if (currentPart && isPartDialogOpen) {
+      setPartFormData({
+        name: currentPart.name,
+        partNumber: currentPart.partNumber,
+        quantity: currentPart.quantity,
+        cost: currentPart.cost || "",
+      })
+    }
+  }, [currentPart, isPartDialogOpen])
+
+  // Helper function to update part in intervals immutably
+  const updatePartInIntervals = useCallback((
+    intervals: MaintenanceInterval[],
+    intervalIndex: number,
+    taskIndex: number,
+    part: MaintenancePart,
+    isEditing: boolean,
+    partId?: string
+  ): MaintenanceInterval[] => {
+    const updatedIntervals = [...intervals]
+    const interval = updatedIntervals[intervalIndex]
+    const task = interval.tasks[taskIndex]
+    
+    if (isEditing && partId) {
+      // Edit existing part
+      updatedIntervals[intervalIndex] = {
+        ...interval,
+        tasks: interval.tasks.map((t, idx) => 
+          idx === taskIndex 
+            ? { ...task, parts: task.parts.map(p => p.id === partId ? part : p) }
+            : t
+        ),
+      }
+    } else {
+      // Add new part
+      updatedIntervals[intervalIndex] = {
+        ...interval,
+        tasks: interval.tasks.map((t, idx) => 
+          idx === taskIndex 
+            ? { ...task, parts: [...task.parts, part] }
+            : t
+        ),
+      }
+    }
+    
+    return updatedIntervals
+  }, [])
 
   // Función para guardar un repuesto
-  const savePart = (part: MaintenancePart) => {
+  const savePart = useCallback(() => {
     if (currentIntervalIndex === null || currentTaskIndex === null) return
+
+    const newPart: MaintenancePart = {
+      id: currentPart?.id || `part-${Date.now()}`,
+      name: partFormData.name,
+      partNumber: partFormData.partNumber,
+      quantity: partFormData.quantity,
+      cost: partFormData.cost || undefined,
+    }
 
     // Si estamos trabajando con una tarea temporal (currentTaskIndex === -1)
     if (currentTaskIndex === -1 && currentTask) {
       if (isEditingPart && currentPart) {
         // Editar repuesto existente en la tarea temporal
         const updatedParts = currentTask.parts.map(p => 
-          p.id === currentPart.id ? part : p
+          p.id === currentPart.id ? newPart : p
         )
         setCurrentTask({ ...currentTask, parts: updatedParts })
       } else {
         // Agregar nuevo repuesto a la tarea temporal
-        setCurrentTask({ ...currentTask, parts: [...currentTask.parts, part] })
+        setCurrentTask({ ...currentTask, parts: [...currentTask.parts, newPart] })
       }
     } else {
       // Trabajar con tareas ya guardadas en los intervalos
-      const updatedIntervals = [...maintenanceIntervals]
-      
-      // Verificar que la tarea existe en el array
-      if (!updatedIntervals[currentIntervalIndex].tasks[currentTaskIndex]) {
-        console.error("Task not found at index:", currentTaskIndex)
-        return
-      }
-
-      if (isEditingPart && currentPart) {
-        // Editar repuesto existente
-        const partIndex = updatedIntervals[currentIntervalIndex].tasks[currentTaskIndex].parts.findIndex(
-          (p) => p.id === currentPart.id,
-        )
-        if (partIndex !== -1) {
-          updatedIntervals[currentIntervalIndex].tasks[currentTaskIndex].parts[partIndex] = part
+      setMaintenanceIntervals((prevIntervals) => {
+        // Verificar que la tarea existe en el array
+        if (!prevIntervals[currentIntervalIndex]?.tasks[currentTaskIndex]) {
+          console.error("Task not found at index:", currentTaskIndex)
+          return prevIntervals
         }
-      } else {
-        // Agregar nuevo repuesto
-        updatedIntervals[currentIntervalIndex].tasks[currentTaskIndex].parts.push(part)
-      }
 
-      setMaintenanceIntervals(updatedIntervals)
+        return updatePartInIntervals(
+          prevIntervals,
+          currentIntervalIndex,
+          currentTaskIndex,
+          newPart,
+          isEditingPart,
+          currentPart?.id
+        )
+      })
     }
 
     setIsPartDialogOpen(false)
-    setCurrentPart(null)
-    setIsEditingPart(false)
-  }
+  }, [currentIntervalIndex, currentTaskIndex, currentTask, currentPart, partFormData, isEditingPart, updatePartInIntervals])
 
   // Función para eliminar un repuesto
-  const removePart = (intervalIndex: number, taskIndex: number, partId: string) => {
+  const removePart = useCallback((intervalIndex: number, taskIndex: number, partId: string) => {
     // Si es una tarea temporal (taskIndex === -1)
     if (taskIndex === -1 && currentTask) {
       const updatedParts = currentTask.parts.filter((part) => part.id !== partId)
       setCurrentTask({ ...currentTask, parts: updatedParts })
     } else {
       // Tarea existente en los intervalos
-      const updatedIntervals = [...maintenanceIntervals]
-      updatedIntervals[intervalIndex].tasks[taskIndex].parts = updatedIntervals[intervalIndex].tasks[
-        taskIndex
-      ].parts.filter((part) => part.id !== partId)
-      setMaintenanceIntervals(updatedIntervals)
+      setMaintenanceIntervals((prevIntervals) => {
+        const updatedIntervals = [...prevIntervals]
+        const interval = updatedIntervals[intervalIndex]
+        const task = interval.tasks[taskIndex]
+        updatedIntervals[intervalIndex] = {
+          ...interval,
+          tasks: interval.tasks.map((t, idx) => 
+            idx === taskIndex 
+              ? { ...task, parts: task.parts.filter((part) => part.id !== partId) }
+              : t
+          ),
+        }
+        return updatedIntervals
+      })
     }
-  }
+  }, [currentTask])
 
   // Funciones para manejo de documentos
   const handleFileSelect = (documentType: 'operationManual' | 'maintenanceGuide' | 'partsList', event: React.ChangeEvent<HTMLInputElement>) => {
@@ -880,37 +1107,42 @@ export function EquipmentModelForm() {
                           </div>
                           {interval.tasks.length > 0 && (
                             <div className="mt-1 space-y-1">
-                              {interval.tasks.map((task, taskIndex) => (
-                                <div
-                                  key={task.id}
-                                  className="flex items-center justify-between text-xs border-l-2 border-primary pl-2"
-                                >
-                                  <div className="flex-1">
-                                    <div className="font-medium">{task.description}</div>
-                                    <div className="text-muted-foreground">
-                                      {task.type} • {task.estimatedTime}h • {task.parts.length} repuestos
+                              {interval.tasks.map((task) => {
+                                const handleEditTask = () => openTaskDialog(intervalIndex, task)
+                                const handleDeleteTask = () => removeTask(intervalIndex, task.id)
+                                
+                                return (
+                                  <div
+                                    key={task.id}
+                                    className="flex items-center justify-between text-xs border-l-2 border-primary pl-2"
+                                  >
+                                    <div className="flex-1">
+                                      <div className="font-medium">{task.description}</div>
+                                      <div className="text-muted-foreground">
+                                        {task.type} • {task.estimatedTime}h • {task.parts.length} repuestos
+                                      </div>
+                                    </div>
+                                    <div className="flex gap-1">
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-6 w-6 p-0"
+                                        onClick={handleEditTask}
+                                      >
+                                        <Edit className="h-3 w-3" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
+                                        onClick={handleDeleteTask}
+                                      >
+                                        <Trash className="h-3 w-3" />
+                                      </Button>
                                     </div>
                                   </div>
-                                  <div className="flex gap-1">
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-6 w-6 p-0"
-                                      onClick={() => openTaskDialog(intervalIndex, task)}
-                                    >
-                                      <Edit className="h-3 w-3" />
-                                    </Button>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
-                                      onClick={() => removeTask(intervalIndex, task.id)}
-                                    >
-                                      <Trash className="h-3 w-3" />
-                                    </Button>
-                                  </div>
-                                </div>
-                              ))}
+                                )
+                              })}
                             </div>
                           )}
                         </div>
@@ -1071,14 +1303,15 @@ export function EquipmentModelForm() {
               <Textarea
                 id="taskDescription"
                 placeholder="Ej: Cambio de aceite y filtro"
-                defaultValue={currentTask?.description || ""}
+                value={taskFormData.description}
+                onChange={(e) => setTaskFormData(prev => ({ ...prev, description: e.target.value }))}
                 className="min-h-[100px]"
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="taskType">Tipo</Label>
-                <Select defaultValue={currentTask?.type || ""}>
+                <Select value={taskFormData.type} onValueChange={(value) => setTaskFormData(prev => ({ ...prev, type: value }))}>
                   <SelectTrigger id="taskType">
                     <SelectValue placeholder="Seleccionar tipo" />
                   </SelectTrigger>
@@ -1098,7 +1331,8 @@ export function EquipmentModelForm() {
                   type="number"
                   step="0.5"
                   min="0.5"
-                  defaultValue={currentTask?.estimatedTime || "1"}
+                  value={taskFormData.estimatedTime}
+                  onChange={(e) => setTaskFormData(prev => ({ ...prev, estimatedTime: Number.parseFloat(e.target.value) || 1 }))}
                 />
               </div>
             </div>
@@ -1106,7 +1340,8 @@ export function EquipmentModelForm() {
               <input
                 type="checkbox"
                 id="requiresSpecialist"
-                defaultChecked={currentTask?.requiresSpecialist || false}
+                checked={taskFormData.requiresSpecialist}
+                onChange={(e) => setTaskFormData(prev => ({ ...prev, requiresSpecialist: e.target.checked }))}
               />
               <Label htmlFor="requiresSpecialist">Requiere técnico especialista</Label>
             </div>
@@ -1122,12 +1357,10 @@ export function EquipmentModelForm() {
                     if (!isEditingTask) {
                       const newTask: MaintenanceTask = {
                         id: `task-${Date.now()}`,
-                        description: (document.getElementById("taskDescription") as HTMLInputElement).value,
-                        type:
-                          (document.querySelector("[data-value]") as HTMLElement)?.getAttribute("data-value") || "Inspección",
-                        estimatedTime:
-                          Number.parseFloat((document.getElementById("taskTime") as HTMLInputElement).value) || 1,
-                        requiresSpecialist: (document.getElementById("requiresSpecialist") as HTMLInputElement).checked,
+                        description: taskFormData.description,
+                        type: taskFormData.type,
+                        estimatedTime: taskFormData.estimatedTime,
+                        requiresSpecialist: taskFormData.requiresSpecialist,
                         parts: [],
                       }
                       setCurrentTask(newTask);
@@ -1163,64 +1396,53 @@ export function EquipmentModelForm() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {(currentTask?.parts || []).map((part, partIndex) => (
-                      <TableRow key={part.id}>
-                        <TableCell>{part.name}</TableCell>
-                        <TableCell>{part.partNumber}</TableCell>
-                        <TableCell>{part.quantity}</TableCell>
-                        <TableCell>{part.cost ? `$${part.cost}` : "N/A"}</TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0"
-                              onClick={() => {
-                                if (currentTask && currentIntervalIndex !== null) {
-                                  if (isEditingTask) {
-                                    // Para tareas existentes
-                                    const taskIndex = maintenanceIntervals[currentIntervalIndex].tasks.findIndex(
-                                      (t) => t.id === currentTask.id,
-                                    )
-                                    if (taskIndex !== -1) {
-                                      openPartDialog(currentIntervalIndex, taskIndex, part)
-                                    }
-                                  } else {
-                                    // Para tareas temporales
-                                    openPartDialog(currentIntervalIndex, -1, part)
-                                  }
-                                }
-                              }}
-                            >
-                              <Edit className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0 text-red-500"
-                              onClick={() => {
-                                if (currentTask && currentIntervalIndex !== null) {
-                                  if (isEditingTask) {
-                                    // Para tareas existentes
-                                    const taskIndex = maintenanceIntervals[currentIntervalIndex].tasks.findIndex(
-                                      (t) => t.id === currentTask.id,
-                                    )
-                                    if (taskIndex !== -1) {
-                                      removePart(currentIntervalIndex, taskIndex, part.id)
-                                    }
-                                  } else {
-                                    // Para tareas temporales
-                                    removePart(currentIntervalIndex, -1, part.id)
-                                  }
-                                }
-                              }}
-                            >
-                              <Trash className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {(() => {
+                      const parts = currentTask?.parts || []
+                      return parts.map((part) => {
+                        const handleEditPart = () => {
+                          if (currentTask && currentIntervalIndex !== null) {
+                            if (isEditingTask) {
+                              // Para tareas existentes
+                              const taskIndex = maintenanceIntervals[currentIntervalIndex].tasks.findIndex(
+                                (t) => t.id === currentTask.id,
+                              )
+                              if (taskIndex !== -1) {
+                                openPartDialog(currentIntervalIndex, taskIndex, part)
+                              }
+                            } else {
+                              // Para tareas temporales
+                              openPartDialog(currentIntervalIndex, -1, part)
+                            }
+                          }
+                        }
+                        
+                        const handleDeletePart = () => {
+                          if (currentTask && currentIntervalIndex !== null) {
+                            if (isEditingTask) {
+                              // Para tareas existentes
+                              const taskIndex = maintenanceIntervals[currentIntervalIndex].tasks.findIndex(
+                                (t) => t.id === currentTask.id,
+                              )
+                              if (taskIndex !== -1) {
+                                removePart(currentIntervalIndex, taskIndex, part.id)
+                              }
+                            } else {
+                              // Para tareas temporales
+                              removePart(currentIntervalIndex, -1, part.id)
+                            }
+                          }
+                        }
+                        
+                        return (
+                          <PartTableRow
+                            key={part.id}
+                            part={part}
+                            onEdit={handleEditPart}
+                            onDelete={handleDeletePart}
+                          />
+                        )
+                      })
+                    })()}
                     {(!currentTask?.parts || currentTask.parts.length === 0) && (
                       <TableRow>
                         <TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-4">
@@ -1242,12 +1464,10 @@ export function EquipmentModelForm() {
                 // Guardar la tarea con los datos actualizados
                 const newTask: MaintenanceTask = {
                   id: currentTask?.id || `task-${Date.now()}`,
-                  description: (document.getElementById("taskDescription") as HTMLInputElement).value,
-                  type:
-                    (document.querySelector("[data-value]") as HTMLElement)?.getAttribute("data-value") || "Inspección",
-                  estimatedTime:
-                    Number.parseFloat((document.getElementById("taskTime") as HTMLInputElement).value) || 1,
-                  requiresSpecialist: (document.getElementById("requiresSpecialist") as HTMLInputElement).checked,
+                  description: taskFormData.description,
+                  type: taskFormData.type,
+                  estimatedTime: taskFormData.estimatedTime,
+                  requiresSpecialist: taskFormData.requiresSpecialist,
                   parts: currentTask?.parts || [],
                 }
                 saveTask(newTask)
@@ -1273,38 +1493,47 @@ export function EquipmentModelForm() {
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="partName">Nombre del Repuesto</Label>
-              <Input id="partName" placeholder="Ej: Filtro de aceite" defaultValue={currentPart?.name || ""} />
+              <Input 
+                id="partName" 
+                placeholder="Ej: Filtro de aceite" 
+                value={partFormData.name}
+                onChange={(e) => setPartFormData(prev => ({ ...prev, name: e.target.value }))}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="partNumber">Número de Parte</Label>
-              <Input id="partNumber" placeholder="Ej: FO-1234" defaultValue={currentPart?.partNumber || ""} />
+              <Input 
+                id="partNumber" 
+                placeholder="Ej: FO-1234" 
+                value={partFormData.partNumber}
+                onChange={(e) => setPartFormData(prev => ({ ...prev, partNumber: e.target.value }))}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="partQuantity">Cantidad</Label>
-              <Input id="partQuantity" type="number" min="1" defaultValue={currentPart?.quantity || "1"} />
+              <Input 
+                id="partQuantity" 
+                type="number" 
+                min="1" 
+                value={partFormData.quantity}
+                onChange={(e) => setPartFormData(prev => ({ ...prev, quantity: Number.parseInt(e.target.value) || 1 }))}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="partCost">Costo Unitario ($)</Label>
-              <Input id="partCost" placeholder="Ej: 25.50" defaultValue={currentPart?.cost || ""} />
+              <Input 
+                id="partCost" 
+                placeholder="Ej: 25.50" 
+                value={partFormData.cost}
+                onChange={(e) => setPartFormData(prev => ({ ...prev, cost: e.target.value }))}
+              />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsPartDialogOpen(false)}>
               Cancelar
             </Button>
-            <Button
-              onClick={() => {
-                // Guardar el repuesto con los datos actualizados
-                const newPart: MaintenancePart = {
-                  id: currentPart?.id || `part-${Date.now()}`,
-                  name: (document.getElementById("partName") as HTMLInputElement).value,
-                  partNumber: (document.getElementById("partNumber") as HTMLInputElement).value,
-                  quantity: Number.parseInt((document.getElementById("partQuantity") as HTMLInputElement).value) || 1,
-                  cost: (document.getElementById("partCost") as HTMLInputElement).value,
-                }
-                savePart(newPart)
-              }}
-            >
+            <Button onClick={savePart}>
               {isEditingPart ? "Actualizar" : "Agregar"}
             </Button>
           </DialogFooter>
