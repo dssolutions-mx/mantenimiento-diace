@@ -298,6 +298,23 @@ export function EquipmentModelForm() {
       setIsEditingTask(false)
     }
   }, [isTaskDialogOpen])
+  
+  // Sync currentTask with intervals when intervals change (for parts updates)
+  useEffect(() => {
+    if (currentTask && currentIntervalIndex !== null && isTaskDialogOpen) {
+      const taskIndex = maintenanceIntervals[currentIntervalIndex]?.tasks.findIndex(
+        (t) => t.id === currentTask.id
+      )
+      if (taskIndex !== -1) {
+        const updatedTask = maintenanceIntervals[currentIntervalIndex].tasks[taskIndex]
+        // Only update if parts have changed to avoid infinite loops
+        if (updatedTask.parts.length !== currentTask.parts.length || 
+            JSON.stringify(updatedTask.parts) !== JSON.stringify(currentTask.parts)) {
+          setCurrentTask(updatedTask)
+        }
+      }
+    }
+  }, [maintenanceIntervals, currentTask, currentIntervalIndex, isTaskDialogOpen])
 
   // Función para guardar una tarea
   const saveTask = useCallback((task: MaintenanceTask) => {
@@ -308,12 +325,20 @@ export function EquipmentModelForm() {
       const interval = updatedIntervals[currentIntervalIndex]
       
       if (isEditingTask && currentTask) {
-        // Editar tarea existente
+        // Editar tarea existente - preserve parts from intervals if they exist
         const taskIndex = interval.tasks.findIndex((t) => t.id === currentTask.id)
         if (taskIndex !== -1) {
+          // Get existing parts from intervals, or use task parts if intervals don't have them
+          const existingTask = interval.tasks[taskIndex]
+          const partsToKeep = existingTask.parts.length > 0 ? existingTask.parts : task.parts
+          
           updatedIntervals[currentIntervalIndex] = {
             ...interval,
-            tasks: interval.tasks.map((t, idx) => idx === taskIndex ? task : t),
+            tasks: interval.tasks.map((t, idx) => 
+              idx === taskIndex 
+                ? { ...task, parts: partsToKeep }
+                : t
+            ),
           }
         }
       } else {
@@ -454,7 +479,7 @@ export function EquipmentModelForm() {
           return prevIntervals
         }
 
-        return updatePartInIntervals(
+        const updatedIntervals = updatePartInIntervals(
           prevIntervals,
           currentIntervalIndex,
           currentTaskIndex,
@@ -462,6 +487,14 @@ export function EquipmentModelForm() {
           isEditingPart,
           currentPart?.id
         )
+        
+        // Update currentTask if it's the same task we're editing
+        if (currentTask && currentTask.id === prevIntervals[currentIntervalIndex].tasks[currentTaskIndex].id) {
+          const updatedTask = updatedIntervals[currentIntervalIndex].tasks[currentTaskIndex]
+          setCurrentTask(updatedTask)
+        }
+        
+        return updatedIntervals
       })
     }
 
@@ -1288,7 +1321,7 @@ export function EquipmentModelForm() {
 
       {/* Diálogo para agregar/editar tareas */}
       <Dialog open={isTaskDialogOpen} onOpenChange={setIsTaskDialogOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-[500px] max-h-[90vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>{isEditingTask ? "Editar Tarea" : "Agregar Nueva Tarea"}</DialogTitle>
             <DialogDescription>
@@ -1297,7 +1330,7 @@ export function EquipmentModelForm() {
                 : "Ingresa los detalles de la nueva tarea de mantenimiento"}
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
+          <div className="grid gap-4 py-4 overflow-y-auto flex-1 min-h-0">
             <div className="space-y-2">
               <Label htmlFor="taskDescription">Descripción</Label>
               <Textarea
@@ -1353,15 +1386,17 @@ export function EquipmentModelForm() {
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    // Si es una tarea nueva, primero creamos una tarea temporal
+                    // Si es una tarea nueva, primero creamos o actualizamos la tarea temporal
                     if (!isEditingTask) {
+                      // Preserve existing parts if currentTask already exists
+                      const existingParts = currentTask?.parts || []
                       const newTask: MaintenanceTask = {
-                        id: `task-${Date.now()}`,
+                        id: currentTask?.id || `task-${Date.now()}`,
                         description: taskFormData.description,
                         type: taskFormData.type,
                         estimatedTime: taskFormData.estimatedTime,
                         requiresSpecialist: taskFormData.requiresSpecialist,
-                        parts: [],
+                        parts: existingParts, // Preserve existing parts
                       }
                       setCurrentTask(newTask);
                       
@@ -1384,9 +1419,9 @@ export function EquipmentModelForm() {
                   Agregar
                 </Button>
               </div>
-              <div className="rounded-md border">
+              <div className="rounded-md border max-h-[300px] overflow-y-auto">
                 <Table>
-                  <TableHeader>
+                  <TableHeader className="sticky top-0 bg-background z-10">
                     <TableRow>
                       <TableHead>Nombre</TableHead>
                       <TableHead>Número de Parte</TableHead>
@@ -1462,13 +1497,30 @@ export function EquipmentModelForm() {
             <Button
               onClick={() => {
                 // Guardar la tarea con los datos actualizados
+                // Get parts from intervals if editing existing task, otherwise use currentTask parts
+                let partsToSave: MaintenancePart[] = []
+                if (isEditingTask && currentTask && currentIntervalIndex !== null) {
+                  // Get parts from intervals (they might have been updated)
+                  const taskIndex = maintenanceIntervals[currentIntervalIndex].tasks.findIndex(
+                    (t) => t.id === currentTask.id
+                  )
+                  if (taskIndex !== -1) {
+                    partsToSave = maintenanceIntervals[currentIntervalIndex].tasks[taskIndex].parts
+                  } else {
+                    partsToSave = currentTask.parts || []
+                  }
+                } else {
+                  // New task - use currentTask parts
+                  partsToSave = currentTask?.parts || []
+                }
+                
                 const newTask: MaintenanceTask = {
                   id: currentTask?.id || `task-${Date.now()}`,
                   description: taskFormData.description,
                   type: taskFormData.type,
                   estimatedTime: taskFormData.estimatedTime,
                   requiresSpecialist: taskFormData.requiresSpecialist,
-                  parts: currentTask?.parts || [],
+                  parts: partsToSave,
                 }
                 saveTask(newTask)
               }}
@@ -1481,7 +1533,7 @@ export function EquipmentModelForm() {
 
       {/* Diálogo para agregar/editar repuestos */}
       <Dialog open={isPartDialogOpen} onOpenChange={setIsPartDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-[425px] max-h-[90vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>{isEditingPart ? "Editar Repuesto" : "Agregar Repuesto"}</DialogTitle>
             <DialogDescription>
@@ -1490,7 +1542,7 @@ export function EquipmentModelForm() {
                 : "Ingresa los detalles del repuesto requerido para esta tarea"}
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
+          <div className="grid gap-4 py-4 overflow-y-auto flex-1 min-h-0">
             <div className="space-y-2">
               <Label htmlFor="partName">Nombre del Repuesto</Label>
               <Input 
