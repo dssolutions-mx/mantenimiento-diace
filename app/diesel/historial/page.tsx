@@ -74,7 +74,7 @@ export default function DieselHistoryPage() {
     try {
       setLoading(true)
 
-      // Load transactions
+      // Load transactions - filter by diesel product
       const { data: transactionsData, error: transactionsError } = await supabase
         .from('diesel_transactions')
         .select(`
@@ -87,9 +87,12 @@ export default function DieselHistoryPage() {
           previous_balance,
           current_balance,
           notes,
-          diesel_warehouses!inner(id, name),
+          diesel_warehouses!inner(id, name, product_type),
+          diesel_products!inner(product_type),
           assets(asset_id, name)
         `)
+        .eq('diesel_warehouses.product_type', 'diesel')
+        .eq('diesel_products.product_type', 'diesel')
         .order('transaction_date', { ascending: false })
         .limit(500)
 
@@ -138,6 +141,7 @@ export default function DieselHistoryPage() {
       const { data: warehousesData } = await supabase
         .from('diesel_warehouses')
         .select('id, name')
+        .eq('product_type', 'diesel')
         .order('name')
 
       setWarehouses(warehousesData || [])

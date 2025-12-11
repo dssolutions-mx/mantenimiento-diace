@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Star, TrendingUp, TrendingDown, Minus } from "lucide-react"
+import { createClient } from "@/lib/supabase"
 
 interface SupplierPerformanceChartProps {
   supplierId: string
@@ -18,6 +19,17 @@ interface PerformanceData {
   delivery_time: number
   cost_accuracy: number
   order_count: number
+}
+
+type RawPerformanceRecord = {
+  order_date: string
+  delivery_date?: string | null
+  promised_delivery_date?: string | null
+  quality_rating?: number | null
+  delivery_rating?: number | null
+  service_rating?: number | null
+  actual_cost?: number | string | null
+  quoted_cost?: number | string | null
 }
 
 export function SupplierPerformanceChart({
@@ -35,45 +47,137 @@ export function SupplierPerformanceChart({
   const loadPerformanceData = async () => {
     setLoading(true)
     try {
-      // TODO: Replace with actual API call
-      const response = await fetch(`/api/suppliers/${supplierId}/performance?time_range=${timeRange}`)
-      const result = await response.json()
+      const supabase = createClient()
+      const startDate = new Date()
+      const endDate = new Date()
 
-      if (response.ok) {
-        setData(result.data || [])
-      } else {
-        console.error('Error loading performance data:', result.error)
-        // Generate mock data for demonstration
-        setData(generateMockData())
+      switch (timeRange) {
+        case '30d':
+          startDate.setDate(endDate.getDate() - 30)
+          break
+        case '90d':
+          startDate.setDate(endDate.getDate() - 90)
+          break
+        case '1y':
+          startDate.setFullYear(endDate.getFullYear() - 1)
+          break
+        default:
+          startDate.setFullYear(endDate.getFullYear() - 3)
       }
+
+      const { data: records, error } = await supabase
+        .from('supplier_performance_history')
+        .select('order_date, delivery_date, promised_delivery_date, quality_rating, delivery_rating, service_rating, actual_cost, quoted_cost, supplier_id')
+        .eq('supplier_id', supplierId)
+        .gte('order_date', startDate.toISOString())
+        .order('order_date', { ascending: true })
+
+      if (error) {
+        console.error('Error loading performance data:', error)
+        setData([])
+        return
+      }
+
+      if (!records || records.length === 0) {
+        setData([])
+        return
+      }
+
+      type Bucket = {
+        period: string
+        dateKey: number
+        ratingSum: number
+        ratingCount: number
+        reliabilitySum: number
+        reliabilityCount: number
+        deliveryTimeSum: number
+        deliveryTimeCount: number
+        costAccuracySum: number
+        costAccuracyCount: number
+        orderCount: number
+      }
+
+      const buckets = new Map<string, Bucket>()
+
+      (records as RawPerformanceRecord[]).forEach((record) => {
+        const orderDate = new Date(record.order_date)
+        const periodLabel = orderDate.toLocaleDateString('es-MX', { month: 'short', year: '2-digit' })
+        const bucket = buckets.get(periodLabel) || {
+          period: periodLabel,
+          dateKey: orderDate.getTime(),
+          ratingSum: 0,
+          ratingCount: 0,
+          reliabilitySum: 0,
+          reliabilityCount: 0,
+          deliveryTimeSum: 0,
+          deliveryTimeCount: 0,
+          costAccuracySum: 0,
+          costAccuracyCount: 0,
+          orderCount: 0
+        }
+
+        const ratings = [record.quality_rating, record.service_rating].filter((v) => typeof v === 'number') as number[]
+        if (ratings.length) {
+          bucket.ratingSum += ratings.reduce((sum, r) => sum + r, 0) / ratings.length
+          bucket.ratingCount += 1
+        }
+
+        if (typeof record.delivery_rating === 'number') {
+          // delivery rating is 1-5, convert to percentage
+          bucket.reliabilitySum += (record.delivery_rating / 5) * 100
+          bucket.reliabilityCount += 1
+        }
+
+        if (record.delivery_date && record.promised_delivery_date) {
+          const deliveryDate = new Date(record.delivery_date)
+          const promisedDate = new Date(record.promised_delivery_date)
+          const diffDays = Math.round((deliveryDate.getTime() - promisedDate.getTime()) / (1000 * 60 * 60 * 24))
+          bucket.deliveryTimeSum += diffDays
+          bucket.deliveryTimeCount += 1
+        }
+
+        if (record.actual_cost && record.quoted_cost) {
+          const actualCost = typeof record.actual_cost === 'string' ? parseFloat(record.actual_cost) : record.actual_cost
+          const quotedCost = typeof record.quoted_cost === 'string' ? parseFloat(record.quoted_cost) : record.quoted_cost
+
+          if (actualCost && quotedCost) {
+            const accuracy = Math.min(actualCost, quotedCost) / Math.max(actualCost, quotedCost) * 100
+            bucket.costAccuracySum += accuracy
+            bucket.costAccuracyCount += 1
+          }
+        }
+
+        // If we only have actual cost, treat it as completed order for count
+        if (record.actual_cost && !record.quoted_cost) {
+          const actualCost = typeof record.actual_cost === 'string' ? parseFloat(record.actual_cost) : record.actual_cost
+          if (actualCost) {
+            bucket.costAccuracySum += 100
+            bucket.costAccuracyCount += 1
+          }
+        }
+
+        bucket.orderCount += 1
+        buckets.set(periodLabel, bucket)
+      })
+
+      const aggregated: PerformanceData[] = Array.from(buckets.values())
+        .sort((a, b) => a.dateKey - b.dateKey)
+        .map((bucket) => ({
+          period: bucket.period,
+          rating: bucket.ratingCount ? Math.round((bucket.ratingSum / bucket.ratingCount) * 10) / 10 : 0,
+          reliability: bucket.reliabilityCount ? Math.round(bucket.reliabilitySum / bucket.reliabilityCount) : 0,
+          delivery_time: bucket.deliveryTimeCount ? Math.round(bucket.deliveryTimeSum / bucket.deliveryTimeCount) : 0,
+          cost_accuracy: bucket.costAccuracyCount ? Math.round(bucket.costAccuracySum / bucket.costAccuracyCount) : 0,
+          order_count: bucket.orderCount
+        }))
+
+      setData(aggregated)
     } catch (error) {
       console.error('Error loading performance data:', error)
-      setData(generateMockData())
+      setData([])
     } finally {
       setLoading(false)
     }
-  }
-
-  const generateMockData = (): PerformanceData[] => {
-    const periods = timeRange === '30d' ? 4 : timeRange === '90d' ? 12 : timeRange === '1y' ? 12 : 24
-    const data: PerformanceData[] = []
-
-    for (let i = 0; i < periods; i++) {
-      const baseRating = 3.5 + Math.random() * 1.5
-      const baseReliability = 70 + Math.random() * 25
-      const baseDelivery = 5 + Math.random() * 10
-
-      data.push({
-        period: `Period ${i + 1}`,
-        rating: Math.round(baseRating * 10) / 10,
-        reliability: Math.round(baseReliability),
-        delivery_time: Math.round(baseDelivery),
-        cost_accuracy: Math.round(85 + Math.random() * 10),
-        order_count: Math.floor(2 + Math.random() * 8)
-      })
-    }
-
-    return data
   }
 
   const getTrendIcon = (current: number, previous: number) => {

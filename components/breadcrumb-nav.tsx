@@ -187,6 +187,56 @@ export function BreadcrumbNav({ className }: BreadcrumbNavProps) {
             }
           }
         }
+      } else if (firstSegment === "urea") {
+        items.push({
+          label: "Gestión de UREA",
+          href: "/urea"
+        })
+        
+        // Handle UREA sub-pages
+        if (pathSegments.length > 1) {
+          const secondSegment = pathSegments[1]
+          
+          if (secondSegment === "consumo") {
+            items.push({
+              label: "Registrar Consumo",
+              href: "/urea/consumo"
+            })
+          } else if (secondSegment === "entrada") {
+            items.push({
+              label: "Registrar Entrada",
+              href: "/urea/entrada"
+            })
+          } else if (secondSegment === "ajuste") {
+            items.push({
+              label: "Ajuste de Inventario",
+              href: "/urea/ajuste"
+            })
+          } else if (secondSegment === "historial") {
+            items.push({
+              label: "Historial de Transacciones",
+              href: "/urea/historial"
+            })
+          } else if (secondSegment === "analytics") {
+            items.push({
+              label: "Analíticas",
+              href: "/urea/analytics"
+            })
+          } else if (secondSegment === "almacen" && pathSegments.length > 2) {
+            items.push({
+              label: "Detalle de Almacén",
+              href: `/urea/almacen/${pathSegments[2]}`
+            })
+            
+            // Handle asset detail within warehouse
+            if (pathSegments.length > 4 && pathSegments[3] === "equipo") {
+              items.push({
+                label: "Detalle de Equipo",
+                href: `/urea/almacen/${pathSegments[2]}/equipo/${pathSegments[4]}`
+              })
+            }
+          }
+        }
       }
     }
     // Records section

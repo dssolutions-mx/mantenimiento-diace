@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useState } from "react"
+import { Suspense, useState, useEffect, useCallback } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
@@ -8,6 +8,9 @@ import { AlertCircle, Database, Upload, Settings, Fuel } from "lucide-react"
 import { DashboardHeader } from "@/components/dashboard/dashboard-header"
 import { DashboardShell } from "@/components/dashboard/dashboard-shell"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Label } from "@/components/ui/label"
+import { useDieselStore } from "@/store/diesel-store"
+import type { ProductType } from "@/types/diesel"
 
 // Import actual components
 import { ImportTab } from "@/components/diesel-inventory/tabs/ImportTab"
@@ -16,35 +19,27 @@ import { ProcessingTab } from "@/components/diesel-inventory/tabs/ProcessingTab"
 
 function DieselInventoryContent() {
   const [activeTab, setActiveTab] = useState("import")
+  const { selectedProductType, setSelectedProductType } = useDieselStore()
+  
+  // Update header text based on product type
+  const productLabels = {
+    diesel: { heading: "Control de Diesel - Migración", text: "Sistema de migración para datos de inventario de diesel desde sistema legacy" },
+    urea: { heading: "Control de UREA - Migración", text: "Sistema de migración para datos de inventario de UREA desde sistema legacy" }
+  }
 
-  const DieselImportTab = () => (
-    <ImportTab 
-      onProceedToMapping={() => setActiveTab("mapping")}
-      onProceedToProcessing={() => setActiveTab("processing")}
-    />
-  )
-
-  const AssetMappingTab = () => (
-    <MappingTab
-      onBackToImport={() => setActiveTab("import")}
-      onProceedToProcessing={() => setActiveTab("processing")}
-    />
-  )
-
-  const ProcessingStatusTab = () => (
-    <ProcessingTab
-      onBackToMapping={() => setActiveTab("mapping")}
-      onComplete={() => {
-        // Could redirect or show success
-        console.log('Processing completed!')
-      }}
-    />
-  )
+  // Callback handlers - memoized to prevent unnecessary re-renders
+  const handleProceedToMapping = useCallback(() => setActiveTab("mapping"), [])
+  const handleProceedToProcessing = useCallback(() => setActiveTab("processing"), [])
+  const handleBackToImport = useCallback(() => setActiveTab("import"), [])
+  const handleBackToMapping = useCallback(() => setActiveTab("mapping"), [])
+  const handleProcessingComplete = useCallback(() => {
+    console.log('Processing completed!')
+  }, [])
   return (
     <DashboardShell>
       <DashboardHeader
-        heading="Control de Diesel - Migración"
-        text="Sistema de migración para datos de inventario de diesel desde sistema legacy"
+        heading={productLabels[selectedProductType].heading}
+        text={productLabels[selectedProductType].text}
       >
         <Badge variant="secondary" className="ml-2">
           <AlertCircle className="mr-1 h-3 w-3" />
@@ -52,13 +47,28 @@ function DieselInventoryContent() {
         </Badge>
       </DashboardHeader>
       
+      {/* Product Type Selector */}
+      <Card className="mb-6">
+        <CardContent className="pt-6">
+          <div className="flex items-center gap-4">
+            <Label htmlFor="product-type" className="text-sm font-medium">Tipo de Producto:</Label>
+            <Tabs value={selectedProductType} onValueChange={(value) => setSelectedProductType(value as ProductType)}>
+              <TabsList>
+                <TabsTrigger value="diesel">Diesel</TabsTrigger>
+                <TabsTrigger value="urea">UREA</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+        </CardContent>
+      </Card>
+      
       {/* Development Warning */}
       <Alert className="mb-6">
         <AlertCircle className="h-4 w-4" />
         <AlertTitle>Herramienta de Desarrollo</AlertTitle>
         <AlertDescription>
           Este módulo está diseñado para migrar datos del sistema legacy. 
-          Una vez completada la migración, se convertirá en el sistema principal de control de diesel.
+          Una vez completada la migración, se convertirá en el sistema principal de control de {selectedProductType === 'diesel' ? 'diesel' : 'UREA'}.
         </AlertDescription>
       </Alert>
 
@@ -109,15 +119,26 @@ function DieselInventoryContent() {
         </TabsList>
 
         <TabsContent value="import">
-          <DieselImportTab />
+          <ImportTab 
+            productType={selectedProductType}
+            onProceedToMapping={handleProceedToMapping}
+            onProceedToProcessing={handleProceedToProcessing}
+          />
         </TabsContent>
 
         <TabsContent value="mapping">
-          <AssetMappingTab />
+          <MappingTab
+            onBackToImport={handleBackToImport}
+            onProceedToProcessing={handleProceedToProcessing}
+          />
         </TabsContent>
 
         <TabsContent value="processing">
-          <ProcessingStatusTab />
+          <ProcessingTab
+            onBackToMapping={handleBackToMapping}
+            onComplete={handleProcessingComplete}
+            productType={selectedProductType}
+          />
         </TabsContent>
       </Tabs>
     </DashboardShell>

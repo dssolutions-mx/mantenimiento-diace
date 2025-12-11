@@ -28,6 +28,7 @@ import { buildEnhancedRow, groupIntoPlantBatches } from '@/lib/diesel-parser-uti
 import { useAuthZustand } from "@/hooks/use-auth-zustand"
 
 interface ExcelUploaderProps {
+  productType: 'diesel' | 'urea'
   onDataParsed?: (data: DieselExcelRow[]) => void
   onBatchCreated?: (batchId: string) => void
 }
@@ -54,7 +55,7 @@ const EXPECTED_COLUMNS = [
   { key: 'inventario', label: 'Inventario', required: false }
 ]
 
-export function ExcelUploader({ onDataParsed, onBatchCreated }: ExcelUploaderProps) {
+export function ExcelUploader({ productType, onDataParsed, onBatchCreated }: ExcelUploaderProps) {
   // Zustand store
   const {
     uploadedFile,
@@ -73,6 +74,7 @@ export function ExcelUploader({ onDataParsed, onBatchCreated }: ExcelUploaderPro
     addNotification,
     addError,
     validateExcelData,
+    user: storeUser,
     setUser,
     setPlantBatches,
     selectPlantBatch,
@@ -81,12 +83,15 @@ export function ExcelUploader({ onDataParsed, onBatchCreated }: ExcelUploaderPro
   
   const { profile, user } = useAuthZustand()
   
-  // Initialize diesel store with user context
+  // Initialize diesel store with user context - only update if different
   useEffect(() => {
-    if (user?.id) {
+    if (user?.id && storeUser?.id !== user.id) {
       setUser({ id: user.id })
+    } else if (!user?.id && storeUser) {
+      setUser(null)
     }
-  }, [user?.id, setUser])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, storeUser?.id]) // Only update if user ID actually changed
   
   // Local state
   const [isDragOver, setIsDragOver] = useState(false)
@@ -144,6 +149,9 @@ export function ExcelUploader({ onDataParsed, onBatchCreated }: ExcelUploaderPro
     return indices
   }
 
+  // Expected product codes by type
+  const expectedProductCode = productType === 'diesel' ? '07DS01' : '07UR01'
+
   // Parse CSV content to DieselExcelRow format (robust, with type coercion)
   const parseCSVContent = useCallback((content: string, filename: string): DieselExcelRow[] => {
     const lines = content.split(/\r?\n/).filter(line => line.trim())
@@ -171,10 +179,18 @@ export function ExcelUploader({ onDataParsed, onBatchCreated }: ExcelUploaderPro
       Object.entries(columnMapping).forEach(([key, idx]) => {
         raw[key] = cells[idx as any] ?? ''
       })
+      
+      // Validate product code matches expected type
+      const rowProductCode = String(raw.clave_producto || '').trim()
+      if (rowProductCode && rowProductCode !== expectedProductCode) {
+        // Skip rows that don't match the selected product type
+        continue
+      }
+      
       parsedRows.push(buildEnhancedRow(raw, i, batchId))
     }
     return parsedRows
-  }, [])
+  }, [expectedProductCode])
 
   // Parse XLSX (.xlsx/.xls) using SheetJS
   const parseXLSXContent = useCallback(async (file: File): Promise<DieselExcelRow[]> => {
@@ -206,10 +222,18 @@ export function ExcelUploader({ onDataParsed, onBatchCreated }: ExcelUploaderPro
       Object.entries(columnMapping).forEach(([key, idx]) => {
         raw[key] = cells[idx as any]
       })
+      
+      // Validate product code matches expected type
+      const rowProductCode = String(raw.clave_producto || '').trim()
+      if (rowProductCode && rowProductCode !== expectedProductCode) {
+        // Skip rows that don't match the selected product type
+        continue
+      }
+      
       parsedRows.push(buildEnhancedRow(raw, i, batchId))
     }
     return parsedRows
-  }, [])
+  }, [expectedProductCode])
 
   // Handle file upload and parsing
   const handleFileUpload = useCallback(async (file: File) => {

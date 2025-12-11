@@ -26,6 +26,7 @@ import { SmartPhotoUpload } from "@/components/checklists/smart-photo-upload"
 import { toast } from "sonner"
 
 interface DieselEntryFormProps {
+  productType: 'diesel' | 'urea'
   warehouseId?: string
   plantId?: string
   onSuccess?: (transactionId: string) => void
@@ -33,6 +34,7 @@ interface DieselEntryFormProps {
 }
 
 export function DieselEntryForm({
+  productType,
   warehouseId,
   plantId,
   onSuccess,
@@ -49,7 +51,7 @@ export function DieselEntryForm({
   const [selectedBusinessUnit, setSelectedBusinessUnit] = useState<string | null>(null)
   const [selectedPlant, setSelectedPlant] = useState<string | null>(null)
   const [selectedWarehouse, setSelectedWarehouse] = useState<string | null>(null)
-  const [dieselProductId, setDieselProductId] = useState<string | null>(null)
+  const [productId, setProductId] = useState<string | null>(null)
   
   // Entry data
   const [quantityLiters, setQuantityLiters] = useState<string>("")
@@ -85,36 +87,39 @@ export function DieselEntryForm({
     }
   }, [])
 
-  // Load organizational structure and diesel product on mount
+  // Load organizational structure and product on mount
   useEffect(() => {
     loadOrganizationalStructure()
-    loadDieselProduct()
+    loadProduct()
     loadBackdatingThreshold()
-  }, [])
+  }, [productType])
 
-  const loadDieselProduct = async () => {
+  const loadProduct = async () => {
     try {
+      const expectedProductCode = productType === 'diesel' ? '07DS01' : '07UR01'
       const { data, error } = await supabase
         .from('diesel_products')
         .select('id')
-        .eq('product_code', '07DS01')
+        .eq('product_code', expectedProductCode)
+        .eq('product_type', productType)
         .single()
 
       if (error) {
         const { data: fallback } = await supabase
           .from('diesel_products')
           .select('id')
+          .eq('product_type', productType)
           .limit(1)
           .single()
         
         if (fallback) {
-          setDieselProductId(fallback.id)
+          setProductId(fallback.id)
         }
       } else if (data) {
-        setDieselProductId(data.id)
+        setProductId(data.id)
       }
     } catch (error) {
-      console.error('Error loading diesel product:', error)
+      console.error(`Error loading ${productType} product:`, error)
     }
   }
 
@@ -189,6 +194,7 @@ export function DieselEntryForm({
         .from('diesel_warehouses')
         .select('id, name, warehouse_code, capacity_liters, current_inventory, has_cuenta_litros, plant_id')
         .eq('plant_id', plantId)
+        .eq('product_type', productType)
         .order('name')
 
       if (error) {
@@ -244,7 +250,7 @@ export function DieselEntryForm({
       return
     }
 
-    if (!dieselProductId) {
+    if (!productId) {
       toast.error("Error: No se encontró el producto diesel")
       return
     }
@@ -330,7 +336,7 @@ export function DieselEntryForm({
       const transactionData: any = {
         plant_id: selectedPlant,
         warehouse_id: selectedWarehouse,
-        product_id: dieselProductId,
+        product_id: productId,
         transaction_type: 'entry',
         asset_category: 'general',  // Entries don't have asset
         asset_id: null,  // Entries cannot have asset_id per DB constraints

@@ -33,6 +33,7 @@ function ConsumptionPageContent() {
       
       <div className="max-w-2xl mx-auto">
         <ConsumptionEntryForm
+          productType="diesel"
           warehouseId={defaultWarehouseId}
           plantId={defaultPlantId}
           onSuccess={handleSuccess}

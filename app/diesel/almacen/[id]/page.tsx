@@ -25,12 +25,15 @@ import {
   X,
   Edit,
   DollarSign,
-  CheckCircle2
+  CheckCircle2,
+  ArrowRightLeft,
+  RefreshCw
 } from "lucide-react"
 import { useRouter, useParams } from "next/navigation"
 import Link from "next/link"
 import { TransactionEditModal } from "@/components/diesel-inventory/transaction-edit-modal"
 import { TransactionEvidenceModal } from "@/components/diesel-inventory/transaction-evidence-modal"
+import { MarkTransferModal } from "@/components/diesel-inventory/mark-transfer-modal"
 
 interface WarehouseDetails {
   id: string
@@ -57,6 +60,8 @@ interface Transaction {
   exception_asset_name: string | null
   created_by_name: string
   previous_balance: number | null
+  is_transfer?: boolean
+  reference_transaction_id?: string | null
   current_balance: number | null
   notes: string | null
   cuenta_litros: number | null
@@ -104,6 +109,10 @@ export default function WarehouseDetailPage() {
   // Evidence modal state
   const [evidenceTransaction, setEvidenceTransaction] = useState<Transaction | null>(null)
   const [isEvidenceModalOpen, setIsEvidenceModalOpen] = useState(false)
+  
+  // Mark transfer modal state
+  const [transferTransaction, setTransferTransaction] = useState<Transaction | null>(null)
+  const [isMarkTransferModalOpen, setIsMarkTransferModalOpen] = useState(false)
   
   // Filters
   const [typeFilter, setTypeFilter] = useState<string>("all")
@@ -172,12 +181,15 @@ export default function WarehouseDetailPage() {
     }
 
     filteredTransactions.forEach(t => {
+      const isTransfer = t.is_transfer || false
+      
       if (t.transaction_type === 'entry') {
         // Check if it's a positive adjustment by looking for adjustment metadata
         if (t.notes && t.notes.includes('[AJUSTE +]')) {
           calculatedStats.total_adjustments_positive++
           calculatedStats.adjustment_positive_liters += t.quantity_liters
-        } else {
+        } else if (!isTransfer) {
+          // Only count non-transfer entries
           calculatedStats.total_entries++
           calculatedStats.entry_liters += t.quantity_liters
           calculatedStats.largest_entry = Math.max(calculatedStats.largest_entry, t.quantity_liters)
@@ -187,7 +199,8 @@ export default function WarehouseDetailPage() {
         if (t.notes && t.notes.includes('[AJUSTE -]')) {
           calculatedStats.total_adjustments_negative++
           calculatedStats.adjustment_negative_liters += t.quantity_liters
-        } else {
+        } else if (!isTransfer) {
+          // Only count non-transfer consumptions
           calculatedStats.total_consumptions++
           calculatedStats.consumption_liters += t.quantity_liters
           calculatedStats.largest_consumption = Math.max(calculatedStats.largest_consumption, t.quantity_liters)
@@ -207,7 +220,8 @@ export default function WarehouseDetailPage() {
     const assetMap = new Map<string, {asset_id: string, asset_name: string, total_liters: number, count: number}>()
     
     filteredTransactions.forEach(t => {
-      if (t.transaction_type === 'consumption') {
+      // Exclude transfers from asset consumption
+      if (t.transaction_type === 'consumption' && !t.is_transfer) {
         const assetKey = t.asset_id || t.exception_asset_name || 'unknown'
         const assetName = t.asset_name || t.exception_asset_name || 'Desconocido'
         
@@ -234,7 +248,7 @@ export default function WarehouseDetailPage() {
     try {
       setLoading(true)
 
-      // Load warehouse details
+      // Load warehouse details - verify it's a diesel warehouse
       const { data: warehouseData, error: warehouseError } = await supabase
         .from('diesel_warehouses')
         .select(`
@@ -246,9 +260,11 @@ export default function WarehouseDetailPage() {
           has_cuenta_litros,
           current_cuenta_litros,
           last_updated,
+          product_type,
           plants!inner(name)
         `)
         .eq('id', warehouseId)
+        .eq('product_type', 'diesel')
         .single()
 
       if (warehouseError) {
@@ -264,7 +280,7 @@ export default function WarehouseDetailPage() {
         })
       }
 
-      // Load warehouse transactions (NO LIMIT - we'll paginate on the client)
+      // Load warehouse transactions - filter by diesel product
       const { data: transactionsData, error: transactionsError } = await supabase
         .from('diesel_transactions')
         .select(`
@@ -287,10 +303,13 @@ export default function WarehouseDetailPage() {
           unit_cost,
           total_cost,
           supplier_responsible,
-          diesel_products(product_code),
-          assets(asset_id, name)
+          diesel_products!inner(product_code, product_type),
+          assets(asset_id, name),
+          is_transfer,
+          reference_transaction_id
         `)
         .eq('warehouse_id', warehouseId)
+        .eq('diesel_products.product_type', 'diesel')
         .order('transaction_date', { ascending: false })
 
       if (transactionsError) {
@@ -339,7 +358,9 @@ export default function WarehouseDetailPage() {
           product_code: t.diesel_products?.product_code || null,
           unit_cost: t.unit_cost ?? null,
           total_cost: t.total_cost ?? null,
-          supplier_responsible: t.supplier_responsible ?? null
+          supplier_responsible: t.supplier_responsible ?? null,
+          is_transfer: t.is_transfer || false,
+          reference_transaction_id: t.reference_transaction_id || null
         })) || []
 
         setTransactions(formatted)
@@ -361,12 +382,16 @@ export default function WarehouseDetailPage() {
         }
 
         formatted.forEach(t => {
+          // Skip transfers from consumption/entry statistics (they're tracked separately)
+          const isTransfer = t.is_transfer || false
+          
           if (t.transaction_type === 'entry') {
             // Check if it's a positive adjustment by looking for adjustment metadata
             if (t.notes && t.notes.includes('[AJUSTE +]')) {
               initialStats.total_adjustments_positive++
               initialStats.adjustment_positive_liters += t.quantity_liters
-            } else {
+            } else if (!isTransfer) {
+              // Only count non-transfer entries
               initialStats.total_entries++
               initialStats.entry_liters += t.quantity_liters
               initialStats.largest_entry = Math.max(initialStats.largest_entry, t.quantity_liters)
@@ -376,7 +401,8 @@ export default function WarehouseDetailPage() {
             if (t.notes && t.notes.includes('[AJUSTE -]')) {
               initialStats.total_adjustments_negative++
               initialStats.adjustment_negative_liters += t.quantity_liters
-            } else {
+            } else if (!isTransfer) {
+              // Only count non-transfer consumptions
               initialStats.total_consumptions++
               initialStats.consumption_liters += t.quantity_liters
               initialStats.largest_consumption = Math.max(initialStats.largest_consumption, t.quantity_liters)
@@ -532,6 +558,64 @@ export default function WarehouseDetailPage() {
     setEditingTransaction(null)
   }
 
+  const handleMarkAsTransfer = (transaction: Transaction) => {
+    setTransferTransaction(transaction)
+    setIsMarkTransferModalOpen(true)
+  }
+
+  const handleMarkTransferSuccess = () => {
+    loadWarehouseData() // Reload to refresh transaction list
+  }
+
+  const handleCloseMarkTransferModal = () => {
+    setIsMarkTransferModalOpen(false)
+    setTransferTransaction(null)
+  }
+
+  const handleFixTransferPrice = async (transaction: Transaction) => {
+    if (!transaction.is_transfer || transaction.transaction_type !== 'entry') {
+      toast({
+        title: "Error",
+        description: "Esta función solo aplica a transacciones de entrada marcadas como transferencia",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      const response = await fetch('/api/diesel/transactions/fix-transfer-price', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          entry_transaction_id: transaction.id
+        })
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Error al calcular el precio')
+      }
+
+      toast({
+        title: "Precio asignado",
+        description: `Precio FIFO calculado: $${data.price?.toFixed(2) || 'N/A'}/L`,
+      })
+
+      // Reload warehouse data to show updated price
+      await loadWarehouseData()
+    } catch (error: any) {
+      console.error('Error fixing transfer price:', error)
+      toast({
+        title: "Error",
+        description: error.message || "No se pudo calcular el precio FIFO para esta transferencia",
+        variant: "destructive"
+      })
+    }
+  }
+
   const getTransactionIcon = (transaction: Transaction) => {
     const isPositiveAdjustment = transaction.transaction_type === 'entry' && 
       transaction.notes && transaction.notes.includes('[AJUSTE +]')
@@ -540,6 +624,7 @@ export default function WarehouseDetailPage() {
     
     if (isPositiveAdjustment) return <TrendingUp className="h-4 w-4 text-blue-600" />
     if (isNegativeAdjustment) return <TrendingDown className="h-4 w-4 text-orange-600" />
+    if (transaction.is_transfer) return <ArrowRightLeft className="h-4 w-4 text-orange-600" />
     if (transaction.transaction_type === 'consumption') return <TrendingDown className="h-4 w-4 text-red-600" />
     if (transaction.transaction_type === 'entry') return <TruckIcon className="h-4 w-4 text-green-600" />
     return <History className="h-4 w-4 text-gray-600" />
@@ -553,6 +638,11 @@ export default function WarehouseDetailPage() {
     
     if (isPositiveAdjustment) return 'Ajuste +'
     if (isNegativeAdjustment) return 'Ajuste -'
+    if (transaction.is_transfer) {
+      if (transaction.transaction_type === 'consumption') return 'Transferencia (Salida)'
+      if (transaction.transaction_type === 'entry') return 'Transferencia (Entrada)'
+      return 'Transferencia'
+    }
     if (transaction.transaction_type === 'consumption') return 'Consumo'
     if (transaction.transaction_type === 'entry') return 'Entrada'
     return transaction.transaction_type
@@ -1131,8 +1221,8 @@ export default function WarehouseDetailPage() {
                     Anterior: {transaction.previous_balance != null ? transaction.previous_balance.toFixed(1) : 'N/A'}L
                   </div>
                   
-                  {/* Edit Button */}
-                  <div className="pt-2">
+                  {/* Action Buttons */}
+                  <div className="pt-2 flex gap-1">
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1142,6 +1232,30 @@ export default function WarehouseDetailPage() {
                       <Edit className="h-3 w-3 mr-1" />
                       Editar
                     </Button>
+                    {(transaction.transaction_type === 'consumption' || transaction.transaction_type === 'entry') && !transaction.is_transfer && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => { e.stopPropagation(); handleMarkAsTransfer(transaction) }}
+                        className="h-8 px-2 text-xs text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                        title="Marcar como transferencia"
+                      >
+                        <ArrowRightLeft className="h-3 w-3 mr-1" />
+                        Transferencia
+                      </Button>
+                    )}
+                    {transaction.is_transfer && transaction.transaction_type === 'entry' && (!transaction.unit_cost || Number(transaction.unit_cost) <= 0) && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => { e.stopPropagation(); handleFixTransferPrice(transaction) }}
+                        className="h-8 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                        title="Calcular precio FIFO para esta transferencia"
+                      >
+                        <RefreshCw className="h-3 w-3 mr-1" />
+                        Calcular precio
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1286,6 +1400,25 @@ export default function WarehouseDetailPage() {
         onClose={() => { setIsEvidenceModalOpen(false); setEvidenceTransaction(null) }}
         headerTitle={evidenceTransaction ? `Evidencia • ${getTransactionLabel(evidenceTransaction)} • ${evidenceTransaction.quantity_liters.toFixed(1)}L` : 'Evidencia'}
         subheader={evidenceTransaction ? new Date(evidenceTransaction.transaction_date).toLocaleString('es-MX', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : undefined}
+      />
+
+      {/* Mark Transfer Modal */}
+      <MarkTransferModal
+        transaction={transferTransaction ? {
+          id: transferTransaction.id,
+          transaction_id: transferTransaction.transaction_id,
+          transaction_type: transferTransaction.transaction_type as 'consumption' | 'entry',
+          quantity_liters: transferTransaction.quantity_liters,
+          transaction_date: transferTransaction.transaction_date,
+          warehouse_id: warehouseId,
+          product_id: transferTransaction.product_id || '',
+          unit_cost: transferTransaction.unit_cost,
+          is_transfer: transferTransaction.is_transfer,
+          reference_transaction_id: transferTransaction.reference_transaction_id
+        } : null}
+        isOpen={isMarkTransferModalOpen}
+        onClose={handleCloseMarkTransferModal}
+        onSuccess={handleMarkTransferSuccess}
       />
     </div>
   )

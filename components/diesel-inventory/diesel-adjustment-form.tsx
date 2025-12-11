@@ -27,6 +27,7 @@ import { SmartPhotoUpload } from "@/components/checklists/smart-photo-upload"
 import { toast } from "sonner"
 
 interface DieselAdjustmentFormProps {
+  productType: 'diesel' | 'urea'
   warehouseId?: string
   plantId?: string
   onSuccess?: (transactionId: string) => void
@@ -34,6 +35,7 @@ interface DieselAdjustmentFormProps {
 }
 
 export function DieselAdjustmentForm({
+  productType,
   warehouseId,
   plantId,
   onSuccess,
@@ -50,7 +52,7 @@ export function DieselAdjustmentForm({
   const [selectedBusinessUnit, setSelectedBusinessUnit] = useState<string | null>(null)
   const [selectedPlant, setSelectedPlant] = useState<string | null>(null)
   const [selectedWarehouse, setSelectedWarehouse] = useState<string | null>(null)
-  const [dieselProductId, setDieselProductId] = useState<string | null>(null)
+  const [productId, setProductId] = useState<string | null>(null)
   const [currentInventory, setCurrentInventory] = useState<number>(0)
   
   // Adjustment data
@@ -85,36 +87,39 @@ export function DieselAdjustmentForm({
     }
   }, [])
 
-  // Load organizational structure and diesel product on mount
+  // Load organizational structure and product on mount
   useEffect(() => {
     loadOrganizationalStructure()
-    loadDieselProduct()
+    loadProduct()
     loadBackdatingThreshold()
-  }, [])
+  }, [productType])
 
-  const loadDieselProduct = async () => {
+  const loadProduct = async () => {
     try {
+      const expectedProductCode = productType === 'diesel' ? '07DS01' : '07UR01'
       const { data, error } = await supabase
         .from('diesel_products')
         .select('id')
-        .eq('product_code', '07DS01')
+        .eq('product_code', expectedProductCode)
+        .eq('product_type', productType)
         .single()
 
       if (error) {
         const { data: fallback } = await supabase
           .from('diesel_products')
           .select('id')
+          .eq('product_type', productType)
           .limit(1)
           .single()
         
         if (fallback) {
-          setDieselProductId(fallback.id)
+          setProductId(fallback.id)
         }
       } else if (data) {
-        setDieselProductId(data.id)
+        setProductId(data.id)
       }
     } catch (error) {
-      console.error('Error loading diesel product:', error)
+      console.error(`Error loading ${productType} product:`, error)
     }
   }
 
@@ -189,6 +194,7 @@ export function DieselAdjustmentForm({
         .from('diesel_warehouses')
         .select('id, name, warehouse_code, capacity_liters, current_inventory, has_cuenta_litros, plant_id')
         .eq('plant_id', plantId)
+        .eq('product_type', productType)
         .order('name')
 
       if (error) {
@@ -253,7 +259,7 @@ export function DieselAdjustmentForm({
       return
     }
 
-    if (!dieselProductId) {
+    if (!productId) {
       toast.error("Error: No se encontró el producto diesel")
       return
     }
@@ -342,7 +348,7 @@ export function DieselAdjustmentForm({
       const transactionData: any = {
         plant_id: selectedPlant,
         warehouse_id: selectedWarehouse,
-        product_id: dieselProductId,
+        product_id: productId,
         transaction_type: adjustmentType === 'positive' ? 'entry' : 'consumption',
         asset_category: adjustmentType === 'positive' ? 'general' : 'exception',  // Different categories for different types
         asset_id: null,  // Adjustments cannot have asset_id

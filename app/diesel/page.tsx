@@ -18,7 +18,8 @@ import {
   History,
   BarChart3,
   Loader2,
-  Info
+  Info,
+  ArrowRightLeft
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
@@ -83,7 +84,7 @@ export default function DieselDashboardPage() {
 
       setUserProfile(profile)
 
-      // Load warehouses with filtering
+      // Load warehouses with filtering - ONLY DIESEL warehouses
       let warehouseQuery = supabase
         .from('diesel_warehouses')
         .select(`
@@ -98,6 +99,7 @@ export default function DieselDashboardPage() {
           plant_id,
           plants!inner(name, business_unit_id)
         `)
+        .eq('product_type', 'diesel')
         .order('name')
 
       // Apply business unit filtering if user has one
@@ -121,7 +123,7 @@ export default function DieselDashboardPage() {
         setTotalInventory(total)
       }
 
-      // Load recent transactions
+      // Load recent transactions - ONLY DIESEL product transactions
       let transactionsQuery = supabase
         .from('diesel_transactions')
         .select(`
@@ -131,9 +133,13 @@ export default function DieselDashboardPage() {
           exception_asset_name,
           transaction_date,
           created_by,
-          diesel_warehouses!inner(id, name, plant_id),
-          assets!left(asset_id, name)
+          product_id,
+          diesel_warehouses!inner(id, name, plant_id, product_type),
+          assets!left(asset_id, name),
+          diesel_products!inner(product_type)
         `)
+        .eq('diesel_products.product_type', 'diesel')
+        .eq('diesel_warehouses.product_type', 'diesel')
         .order('transaction_date', { ascending: false })
         .limit(10)
 
@@ -245,7 +251,7 @@ export default function DieselDashboardPage() {
       {/* Quick Actions */}
       <div>
         <h2 className="text-lg font-semibold mb-3">Acciones Rápidas</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <Button
             onClick={() => router.push('/diesel/consumo')}
             className="h-20 text-lg"
@@ -262,6 +268,15 @@ export default function DieselDashboardPage() {
           >
             <TruckIcon className="h-6 w-6 mr-2" />
             Registrar Entrada
+          </Button>
+          
+          <Button
+            onClick={() => router.push('/diesel/transferir')}
+            className="h-20 text-lg"
+            variant="outline"
+          >
+            <ArrowRightLeft className="h-6 w-6 mr-2" />
+            Transferir Diesel
           </Button>
           
           <Button

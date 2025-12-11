@@ -21,6 +21,7 @@ import { PurchaseOrderWorkOrderLink } from "@/components/purchase-orders/purchas
 import { Suspense } from "react"
 import { EditPOButton } from "@/components/purchase-orders/EditPOButton"
 import { QuotationManager } from "@/components/purchase-orders/QuotationManager"
+import { ReportIssueButton } from "@/components/purchase-orders/ReportIssueButton"
 
 // Helper function to format currency
 function formatCurrency(amount: string | null): string {
@@ -326,6 +327,15 @@ async function PurchaseOrderDetailsContent({ id }: { id: string }) {
            )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Report Issue Button - only show if supplier_id exists */}
+          {order.supplier_id && (
+            <ReportIssueButton
+              purchaseOrderId={order.id}
+              purchaseOrderIdDisplay={order.order_id}
+              supplierId={order.supplier_id}
+              supplierName={order.supplier}
+            />
+          )}
           {/* Edit button only when order is not validated */}
           {order.status !== 'validated' && (
             <EditPOButton
