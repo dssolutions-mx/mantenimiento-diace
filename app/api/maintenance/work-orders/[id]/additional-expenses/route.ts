@@ -1,11 +1,11 @@
 import { createClient } from "@/lib/supabase"
-import { NextResponse } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import { createServerClient } from "@supabase/ssr"
 import { cookies } from "next/headers"
 
 export async function GET(
-  request: Request,
-  { params }: { params: { id: string } }
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     // Initialize Supabase client
@@ -54,12 +54,13 @@ export async function GET(
     // Parse URL to get query parameters
     const url = new URL(request.url)
     const status = url.searchParams.get("status") || undefined
+    const { id: workOrderId } = await params
     
     // Build the query
     let query = supabase
       .from("additional_expenses")
       .select("id, description, amount, justification, status, adjustment_po_id")
-      .eq("work_order_id", params.id)
+      .eq("work_order_id", workOrderId)
     
     // Add status filter if provided
     if (status) {

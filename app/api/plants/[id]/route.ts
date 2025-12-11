@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase-server'
 import { NextRequest, NextResponse } from 'next/server'
 
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const supabase = await createClient()
     
@@ -28,7 +28,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
     }
 
-    const plantId = params.id
+    const { id: plantId } = await params
     const updateData = await request.json()
 
     // Remove fields that shouldn't be updated directly
@@ -77,7 +77,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   }
 }
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const supabase = await createClient()
     
@@ -87,7 +87,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const plantId = params.id
+    const { id: plantId } = await params
 
     const { data: plant, error } = await supabase
       .from('plants')

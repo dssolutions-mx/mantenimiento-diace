@@ -4,9 +4,9 @@ import { UpdateSupplierRequest } from '@/types/suppliers'
 import { normalizeIndustry, normalizeSpecialty } from '@/lib/suppliers/taxonomy'
 
 interface RouteParams {
-  params: {
+  params: Promise<{
     id: string
-  }
+  }>
 }
 
 export async function GET(
@@ -15,7 +15,7 @@ export async function GET(
 ) {
   try {
     const supabase = await createClient()
-    const { id } = params
+    const { id } = await params
 
     const { data: supplier, error } = await supabase
       .from('suppliers')
@@ -64,7 +64,7 @@ export async function PUT(
 ) {
   try {
     const supabase = await createClient()
-    const { id } = params
+    const { id } = await params
 
     // Get the authenticated user
     const { data: { user }, error: authError } = await supabase.auth.getUser()
@@ -158,7 +158,7 @@ export async function DELETE(
 ) {
   try {
     const supabase = await createClient()
-    const { id } = params
+    const { id } = await params
 
     // Get the authenticated user
     const { data: { user }, error: authError } = await supabase.auth.getUser()

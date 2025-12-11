@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase'
 
 interface RouteParams {
-  params: {
+  params: Promise<{
     id: string
-  }
+  }>
 }
 
 export async function POST(
@@ -13,7 +13,7 @@ export async function POST(
 ) {
   try {
     const supabase = createClient()
-    const { id: workOrderId } = params
+    const { id: workOrderId } = await params
 
     // Get the authenticated user
     const { data: { user }, error: authError } = await supabase.auth.getUser()
