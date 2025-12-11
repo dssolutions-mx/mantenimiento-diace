@@ -29,6 +29,7 @@ import { SmartPhotoUpload } from "@/components/checklists/smart-photo-upload"
 import { toast } from "sonner"
 
 interface ConsumptionEntryFormProps {
+  productType: 'diesel' | 'urea'
   warehouseId?: string
   plantId?: string
   onSuccess?: (transactionId: string) => void
@@ -36,6 +37,7 @@ interface ConsumptionEntryFormProps {
 }
 
 export function ConsumptionEntryForm({
+  productType,
   warehouseId,
   plantId,
   onSuccess,
@@ -52,7 +54,7 @@ export function ConsumptionEntryForm({
   const [selectedBusinessUnit, setSelectedBusinessUnit] = useState<string | null>(null)
   const [selectedPlant, setSelectedPlant] = useState<string | null>(null)
   const [selectedWarehouse, setSelectedWarehouse] = useState<string | null>(null)
-  const [dieselProductId, setDieselProductId] = useState<string | null>(null)
+  const [productId, setProductId] = useState<string | null>(null)
   const [assetType, setAssetType] = useState<'formal' | 'exception'>('formal')
   const [selectedAsset, setSelectedAsset] = useState<any>(null)
   const [exceptionAssetName, setExceptionAssetName] = useState<string>("")
@@ -91,39 +93,42 @@ export function ConsumptionEntryForm({
     }
   }, [])
 
-  // Load organizational structure and diesel product on mount
+  // Load organizational structure and product on mount
   useEffect(() => {
     loadOrganizationalStructure()
-    loadDieselProduct()
+    loadProduct()
     loadBackdatingThreshold()
-  }, [])
+  }, [productType])
 
-  const loadDieselProduct = async () => {
+  const loadProduct = async () => {
     try {
-      // Get the default diesel product (07DS01)
+      // Get the product by product type
+      const expectedProductCode = productType === 'diesel' ? '07DS01' : '07UR01'
       const { data, error } = await supabase
         .from('diesel_products')
         .select('id')
-        .eq('product_code', '07DS01')
+        .eq('product_code', expectedProductCode)
+        .eq('product_type', productType)
         .single()
 
       if (error) {
-        console.error('Error loading diesel product:', error)
-        // Fallback: get any diesel product
+        console.error(`Error loading ${productType} product:`, error)
+        // Fallback: get any product of this type
         const { data: fallback } = await supabase
           .from('diesel_products')
           .select('id')
+          .eq('product_type', productType)
           .limit(1)
           .single()
         
         if (fallback) {
-          setDieselProductId(fallback.id)
+          setProductId(fallback.id)
         }
       } else if (data) {
-        setDieselProductId(data.id)
+        setProductId(data.id)
       }
     } catch (error) {
-      console.error('Error loading diesel product:', error)
+      console.error(`Error loading ${productType} product:`, error)
     }
   }
 
@@ -198,11 +203,12 @@ export function ConsumptionEntryForm({
 
   const loadWarehousesForPlant = async (plantId: string) => {
     try {
-      // Load warehouses with current inventory
+      // Load warehouses with current inventory - filter by product_type
       const { data, error } = await supabase
         .from('diesel_warehouses')
         .select('id, name, warehouse_code, capacity_liters, current_inventory, has_cuenta_litros, plant_id')
         .eq('plant_id', plantId)
+        .eq('product_type', productType)
         .order('name')
 
       if (error) {
@@ -358,8 +364,8 @@ export function ConsumptionEntryForm({
       return
     }
 
-    if (!dieselProductId) {
-      toast.error("Error: No se encontró el producto diesel")
+    if (!productId) {
+      toast.error(`Error: No se encontró el producto ${productType === 'diesel' ? 'diesel' : 'UREA'}`)
       return
     }
 
@@ -464,12 +470,12 @@ export function ConsumptionEntryForm({
       // Create transaction (different structure for formal vs exception assets)
       console.log('Step 3: Building transaction data...')
       console.log('Selected Plant ID:', selectedPlant)
-      console.log('Diesel Product ID:', dieselProductId)
+      console.log('Product ID:', productId)
       
       const transactionData: any = {
         plant_id: selectedPlant,
         warehouse_id: selectedWarehouse,
-        product_id: dieselProductId,
+        product_id: productId,
         transaction_type: 'consumption',
         asset_category: assetType,
         quantity_liters: parseFloat(quantityLiters),

@@ -52,6 +52,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
       `)
       .eq('asset_id', assetId)
       .eq('transaction_type', 'consumption')
+      .eq('is_transfer', false)
       .gte('transaction_date', startISO)
       .lte('transaction_date', endISOInclusive)
       .order('transaction_date', { ascending: false })
@@ -63,6 +64,9 @@ export async function GET(request: Request, { params }: { params: { id: string }
     const poPromise = fetch(`${base}/api/reports/executive/purchase-orders?${paramsPO.toString()}`)
 
     // Remisiones per-day from Cotizador sales_assets_daily
+    // Note: This view is now a materialized view (mv_sales_assets_daily) for performance.
+    // It refreshes automatically every hour at :30 past the hour, so data may be up to 1 hour old.
+    // The view name remains the same (aliased).
     let remisionesDaily: any[] = []
     try {
       if (!process.env.COTIZADOR_SUPABASE_URL || !process.env.COTIZADOR_SUPABASE_SERVICE_ROLE_KEY) {

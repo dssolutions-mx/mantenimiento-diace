@@ -28,10 +28,22 @@ import {
 import { cn } from "@/lib/utils"
 import { useDieselStore } from '@/store/diesel-store'
 import { MeterReconciliationDialog } from '../dialogs/MeterReconciliationDialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { createBrowserClient } from '@supabase/ssr'
 
 interface ProcessingTabProps {
   onBackToMapping?: () => void
   onComplete?: () => void
+  productType?: 'diesel' | 'urea'
 }
 
 interface ProcessingStep {
@@ -45,7 +57,7 @@ interface ProcessingStep {
   details?: string[]
 }
 
-export function ProcessingTab({ onBackToMapping, onComplete }: ProcessingTabProps) {
+export function ProcessingTab({ onBackToMapping, onComplete, productType = 'diesel' }: ProcessingTabProps) {
   const {
     parsedData,
     pendingMappings,
@@ -75,6 +87,19 @@ export function ProcessingTab({ onBackToMapping, onComplete }: ProcessingTabProp
   const canStart = parsedData.length > 0 && status !== 'processing'
   const [showMeterDialog, setShowMeterDialog] = useState(false)
   const [processingApiResponse, setProcessingApiResponse] = useState<any>(null)
+  
+  // Missing warehouse dialog state
+  const [showWarehouseDialog, setShowWarehouseDialog] = useState(false)
+  const [missingWarehouseInfo, setMissingWarehouseInfo] = useState<{
+    plant_id: string
+    plant_code: string
+    plant_name: string
+    warehouse_number: string
+    product_type: 'diesel' | 'urea'
+    suggested_warehouse_code: string
+    suggested_name: string
+  } | null>(null)
+  const [creatingWarehouse, setCreatingWarehouse] = useState(false)
   
   const [processingSteps, setProcessingSteps] = useState<ProcessingStep[]>([
     {
@@ -129,6 +154,59 @@ export function ProcessingTab({ onBackToMapping, onComplete }: ProcessingTabProp
       message
     }].slice(-100)) // Keep only last 100 logs
   }, [])
+
+  // Create missing warehouse
+  const createMissingWarehouse = useCallback(async () => {
+    if (!missingWarehouseInfo) return
+    
+    setCreatingWarehouse(true)
+    try {
+      const supabase = createBrowserClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+      )
+      
+      const { data, error } = await supabase
+        .from('diesel_warehouses')
+        .insert({
+          name: missingWarehouseInfo.suggested_name,
+          warehouse_code: missingWarehouseInfo.suggested_warehouse_code,
+          plant_id: missingWarehouseInfo.plant_id,
+          capacity_liters: 5000,
+          current_inventory: 0,
+          has_cuenta_litros: false,
+          product_type: missingWarehouseInfo.product_type
+        })
+        .select()
+        .single()
+      
+      if (error) {
+        throw error
+      }
+      
+      addNotification({
+        type: 'success',
+        title: 'Almacén Creado',
+        message: `El almacén "${missingWarehouseInfo.suggested_name}" ha sido creado exitosamente.`
+      })
+      
+      setShowWarehouseDialog(false)
+      setMissingWarehouseInfo(null)
+      
+      // Retry processing
+      addLog('info', 'Almacén creado, reintentando procesamiento...')
+      
+    } catch (error) {
+      console.error('Error creating warehouse:', error)
+      addNotification({
+        type: 'error',
+        title: 'Error al Crear Almacén',
+        message: error instanceof Error ? error.message : 'Error desconocido'
+      })
+    } finally {
+      setCreatingWarehouse(false)
+    }
+  }, [missingWarehouseInfo, addNotification, addLog])
 
   // Update processing step
   const updateStep = useCallback((stepId: string, updates: Partial<ProcessingStep>) => {
@@ -317,16 +395,56 @@ export function ProcessingTab({ onBackToMapping, onComplete }: ProcessingTabProp
               .filter(c => c.resolution !== 'pending')
               .map(c => [c.asset_code, c.resolution])
           ),
-          assetMappings: Object.fromEntries(pendingMappings)
+          assetMappings: Object.fromEntries(pendingMappings),
+          productType: productType // Pass product type to API
         })
       })
 
-      if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`)
+      let result: any
+      try {
+        result = await response.json()
+      } catch (jsonError) {
+        console.error('[ProcessingTab] Failed to parse JSON response:', jsonError)
+        throw new Error(`Failed to parse server response: ${response.status} ${response.statusText}`)
       }
-
-      const result = await response.json()
+      
       setProcessingApiResponse(result)
+      
+      // Check for warehouse not found error FIRST before throwing
+      if (!response.ok) {
+        if (result?.code === 'WAREHOUSE_NOT_FOUND' && result?.details) {
+          console.log('[ProcessingTab] Warehouse not found, showing creation dialog')
+          addLog('warning', `Almacén no encontrado: ${result.details.suggested_name}`)
+          
+          // Set all state updates together
+          setMissingWarehouseInfo(result.details)
+          setShowWarehouseDialog(true)
+          setIsProcessing(false)
+          setProcessingStatus('idle')
+          
+          updateStep('staging', {
+            status: 'error',
+            progress: 50,
+            endTime: new Date(),
+            details: [
+              `Almacén ${result.details.warehouse_number} no existe para ${result.details.plant_name}`,
+              `Tipo de producto: ${result.details.product_type === 'urea' ? 'UREA' : 'Diesel'}`,
+              'Se requiere crear el almacén antes de continuar'
+            ]
+          })
+          
+          addNotification({
+            type: 'warning',
+            title: 'Almacén No Encontrado',
+            message: `El almacén ${result.details.warehouse_number} no existe para ${result.details.plant_name}. Créalo para continuar.`
+          })
+          
+          return
+        }
+        
+        // If not warehouse error, throw generic error
+        throw new Error(result?.error || `API error: ${response.statusText}`)
+      }
 
       // Check if meter conflicts need resolution
       if (result.status === 'needs_meter_resolution') {
@@ -405,6 +523,7 @@ export function ProcessingTab({ onBackToMapping, onComplete }: ProcessingTabProp
       onComplete?.()
 
     } catch (error) {
+      console.error('[ProcessingTab] Processing error:', error)
       const errorMessage = error instanceof Error ? error.message : 'Error desconocido'
       addLog('error', `Error: ${errorMessage}`)
       
@@ -427,7 +546,7 @@ export function ProcessingTab({ onBackToMapping, onComplete }: ProcessingTabProp
     } finally {
       setIsProcessing(false)
     }
-  }, [canStart, parsedData.length, processDataBatch, pendingMappings, errorCount, addLog, updateStep, setProcessingStatus, setCurrentStep, setOverallProgress, addNotification, onComplete, getSelectedPlantBatch, meterPreferences, meterConflicts, setMeterConflicts])
+  }, [canStart, parsedData.length, processDataBatch, pendingMappings, errorCount, addLog, updateStep, setProcessingStatus, setCurrentStep, setOverallProgress, addNotification, onComplete, getSelectedPlantBatch, meterPreferences, meterConflicts, setMeterConflicts, productType])
 
   // Handle meter dialog close and retry
   const handleMeterDialogClose = () => {
@@ -819,6 +938,75 @@ export function ProcessingTab({ onBackToMapping, onComplete }: ProcessingTabProp
         onClose={handleMeterDialogClose}
         onResolveAll={handleMeterConflictsResolved}
       />
+      
+      {/* Missing Warehouse Dialog */}
+      <Dialog open={showWarehouseDialog} onOpenChange={setShowWarehouseDialog}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Building className="h-5 w-5 text-orange-500" />
+              Almacén No Encontrado
+            </DialogTitle>
+            <DialogDescription>
+              El almacén necesario para esta importación no existe. Créalo para continuar.
+            </DialogDescription>
+          </DialogHeader>
+          
+          {missingWarehouseInfo && (
+            <div className="space-y-4 py-4">
+              <Alert className="bg-amber-50 border-amber-200">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <AlertTitle className="text-amber-900">Almacén Requerido</AlertTitle>
+                <AlertDescription className="text-amber-700">
+                  Se necesita crear un almacén de <strong>{missingWarehouseInfo.product_type === 'urea' ? 'UREA' : 'Diesel'}</strong> para la planta <strong>{missingWarehouseInfo.plant_name}</strong>.
+                </AlertDescription>
+              </Alert>
+              
+              <div className="grid gap-4">
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label className="text-right text-muted-foreground">Planta:</Label>
+                  <div className="col-span-3 font-medium">{missingWarehouseInfo.plant_name}</div>
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label className="text-right text-muted-foreground">Producto:</Label>
+                  <div className="col-span-3">
+                    <Badge variant={missingWarehouseInfo.product_type === 'urea' ? 'default' : 'secondary'}>
+                      {missingWarehouseInfo.product_type === 'urea' ? 'UREA' : 'Diesel'}
+                    </Badge>
+                  </div>
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label className="text-right text-muted-foreground">Código:</Label>
+                  <div className="col-span-3 font-mono text-sm">{missingWarehouseInfo.suggested_warehouse_code}</div>
+                </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label className="text-right text-muted-foreground">Nombre:</Label>
+                  <div className="col-span-3">{missingWarehouseInfo.suggested_name}</div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowWarehouseDialog(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={createMissingWarehouse} disabled={creatingWarehouse}>
+              {creatingWarehouse ? (
+                <>
+                  <Activity className="mr-2 h-4 w-4 animate-spin" />
+                  Creando...
+                </>
+              ) : (
+                <>
+                  <Building className="mr-2 h-4 w-4" />
+                  Crear Almacén
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { devtools, subscribeWithSelector } from 'zustand/middleware'
 
 // Import types from centralized type file
-import type { PlantBatch, MeterConflict, MeterReconciliationPreferences } from '@/types/diesel'
+import type { PlantBatch, MeterConflict, MeterReconciliationPreferences, ProductType } from '@/types/diesel'
 
 // Re-export for backward compatibility
 export interface DieselExcelRow {
@@ -152,6 +152,9 @@ interface DieselStore {
   meterConflicts: MeterConflict[];
   meterPreferences: MeterReconciliationPreferences;
   
+  // Product type selection (NEW)
+  selectedProductType: ProductType;
+  
   unmappedAssets: AssetMappingEntry[];
   pendingMappings: Map<string, AssetResolution>;
   mappingProgress: number;
@@ -185,6 +188,9 @@ interface DieselStore {
   setMeterConflicts: (conflicts: MeterConflict[]) => void;
   resolveMeterConflict: (assetCode: string, resolution: MeterConflict['resolution']) => void;
   setMeterPreferences: (prefs: Partial<MeterReconciliationPreferences>) => void;
+  
+  // Product type actions (NEW)
+  setSelectedProductType: (productType: ProductType) => void;
   
   setUnmappedAssets: (assets: AssetMappingEntry[]) => void;
   addPendingMapping: (originalName: string, resolution: AssetResolution) => void;
@@ -238,6 +244,9 @@ export const useDieselStore = create<DieselStore>()(
           update_threshold_days: 7,
           prompt_if_discrepancy_gt: 10
         },
+        
+        // Product type (NEW)
+        selectedProductType: 'diesel',
         
         unmappedAssets: [],
         pendingMappings: new Map(),
@@ -382,6 +391,7 @@ export const useDieselStore = create<DieselStore>()(
             meterPreferences: { ...state.meterPreferences, ...prefs }
           }))
         },
+        setSelectedProductType: (productType: ProductType) => set({ selectedProductType: productType }),
         setUnmappedAssets: (assets: AssetMappingEntry[]) => set({ unmappedAssets: assets }),
         addPendingMapping: (originalName: string, resolution: AssetResolution) => {
           set(state => {
@@ -399,7 +409,130 @@ export const useDieselStore = create<DieselStore>()(
         },
         setMappingProgress: (progress: number) => set({ mappingProgress: Math.max(0, Math.min(100, progress)) }),
         submitAssetMappings: async () => {
-          return true
+          const state = get()
+          const { pendingMappings, user } = state
+          
+          if (pendingMappings.size === 0) {
+            console.warn('[DieselStore] No mappings to submit')
+            return true
+          }
+          
+          if (!user?.id) {
+            console.error('[DieselStore] Cannot submit mappings: no user')
+            return false
+          }
+          
+          try {
+            // Check if we're in browser environment
+            if (typeof window === 'undefined') {
+              console.error('[DieselStore] Cannot submit mappings: not in browser environment')
+              return false
+            }
+            
+            // Dynamically import Supabase client to avoid SSR issues
+            const { createBrowserClient } = await import('@supabase/ssr')
+            const supabase = createBrowserClient(
+              process.env.NEXT_PUBLIC_SUPABASE_URL!,
+              process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+            )
+            
+            // Save each mapping to the database
+            let successCount = 0
+            let errorCount = 0
+            
+            for (const [originalName, resolution] of pendingMappings.entries()) {
+              try {
+                // Determine mapping type
+                let mappingType: 'formal' | 'exception' | 'ignore' = 'ignore'
+                let assetId: string | null = null
+                let exceptionAssetId: string | null = null
+                
+                if (resolution.resolution_type === 'formal' && resolution.asset_id) {
+                  mappingType = 'formal'
+                  assetId = resolution.asset_id
+                } else if (resolution.resolution_type === 'exception') {
+                  mappingType = 'exception'
+                  // For exceptions, we need to get or create the exception asset
+                  // For now, we'll need to handle this during processing
+                  // But we can still save the mapping with a placeholder
+                  // The exception asset will be created during batch processing
+                } else if (resolution.resolution_type === 'general') {
+                  // General consumption doesn't need a mapping saved
+                  continue
+                } else {
+                  mappingType = 'ignore'
+                }
+                
+                // Only save formal and exception mappings (ignore general and unmapped)
+                if (mappingType === 'ignore' && resolution.resolution_type !== 'exception') {
+                  continue
+                }
+                
+                // For exception mappings, we need to create/get the exception asset first
+                if (mappingType === 'exception') {
+                  // Check if exception asset exists
+                  const { data: existingException } = await supabase
+                    .from('exception_assets')
+                    .select('id')
+                    .eq('exception_name', originalName)
+                    .single()
+                  
+                  if (existingException) {
+                    exceptionAssetId = existingException.id
+                  } else {
+                    // Create exception asset
+                    const { data: newException, error: createError } = await supabase
+                      .from('exception_assets')
+                      .insert({
+                        exception_name: originalName,
+                        normalized_name: originalName.toLowerCase().trim(),
+                        asset_type: 'unknown'
+                      })
+                      .select('id')
+                      .single()
+                    
+                    if (createError || !newException) {
+                      console.error(`[DieselStore] Failed to create exception asset for ${originalName}:`, createError)
+                      errorCount++
+                      continue
+                    }
+                    
+                    exceptionAssetId = newException.id
+                  }
+                }
+                
+                // Save the mapping using RPC function
+                const { error: mappingError } = await supabase.rpc('create_asset_mapping', {
+                  p_original_name: originalName,
+                  p_asset_id: assetId,
+                  p_exception_asset_id: exceptionAssetId,
+                  p_mapping_type: mappingType,
+                  p_created_by: user.id
+                })
+                
+                if (mappingError) {
+                  console.error(`[DieselStore] Failed to save mapping for ${originalName}:`, mappingError)
+                  errorCount++
+                } else {
+                  successCount++
+                }
+              } catch (error) {
+                console.error(`[DieselStore] Error processing mapping for ${originalName}:`, error)
+                errorCount++
+              }
+            }
+            
+            console.log(`[DieselStore] Mappings saved: ${successCount} successful, ${errorCount} errors`)
+            
+            if (errorCount > 0 && successCount === 0) {
+              return false
+            }
+            
+            return true
+          } catch (error) {
+            console.error('[DieselStore] Error submitting asset mappings:', error)
+            return false
+          }
         },
         setProcessingStatus: (status: DieselStore['processingStatus']) => set({ processingStatus: status }),
         setCurrentStep: (step: string) => set({ currentStep: step }),

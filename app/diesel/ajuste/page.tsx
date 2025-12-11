@@ -9,6 +9,7 @@ export default function DieselAdjustmentPage() {
   return (
     <div className="container max-w-4xl mx-auto py-6 px-4">
       <DieselAdjustmentForm
+        productType="diesel"
         onSuccess={(transactionId) => {
           console.log('Adjustment created:', transactionId)
           router.push('/diesel')

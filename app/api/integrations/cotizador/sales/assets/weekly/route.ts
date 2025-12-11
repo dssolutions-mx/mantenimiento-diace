@@ -27,6 +27,9 @@ export async function POST(req: NextRequest) {
     )
 
     // Query the new DAILY view - much simpler and more accurate!
+    // Note: This view is now a materialized view (mv_sales_assets_daily) for performance.
+    // It refreshes automatically every hour at :30 past the hour, so data may be up to 1 hour old.
+    // The view name remains the same (aliased).
     let query = cotizador.from('sales_assets_daily').select('*')
       .gte('day', dateFrom)
       .lte('day', dateTo)

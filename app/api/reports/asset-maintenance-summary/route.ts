@@ -166,6 +166,7 @@ export async function POST(req: NextRequest) {
         horometer_reading,
         previous_horometer
       `)
+      .eq('is_transfer', false)
       .gte('transaction_date', dateFrom)
       .lt('transaction_date', dateToExclusiveStr)
 

@@ -36,6 +36,7 @@ import {
   Sparkles,
   Shield,
   Fuel,
+  Droplet,
   IdCard,
   Target,
 } from "lucide-react"
@@ -124,6 +125,10 @@ export function Sidebar({ className, onLinkClick }: SidebarProps) {
   }
 
   const isPathActive = (path: string) => {
+    // Special handling for /suppliers to avoid matching /suppliers/analytics
+    if (path === "/suppliers") {
+      return pathname === path || (pathname.startsWith(path + "/") && !pathname.startsWith("/suppliers/analytics"))
+    }
     return pathname === path || pathname.startsWith(path + "/")
   }
 
@@ -310,6 +315,17 @@ export function Sidebar({ className, onLinkClick }: SidebarProps) {
                       <Link href="/diesel">
                         <Fuel className="mr-2 h-4 w-4" />
                         Gestión de Diesel
+                      </Link>
+                    </Button>
+                    <Button
+                      variant={isPathActive("/urea") ? "secondary" : "ghost"}
+                      className="w-full justify-start pl-8"
+                      asChild
+                      onClick={handleLinkClick}
+                    >
+                      <Link href="/urea">
+                        <Droplet className="mr-2 h-4 w-4" />
+                        Gestión de UREA
                       </Link>
                     </Button>
                     <Button
@@ -674,6 +690,17 @@ export function Sidebar({ className, onLinkClick }: SidebarProps) {
                       </Link>
                     </Button>
                     <Button
+                      variant={isPathActive("/urea") ? "secondary" : "ghost"}
+                      className="w-full justify-start pl-8"
+                      asChild
+                      onClick={handleLinkClick}
+                    >
+                      <Link href="/urea">
+                        <Droplet className="mr-2 h-4 w-4" />
+                        Gestión de UREA
+                      </Link>
+                    </Button>
+                    <Button
                       variant={isPathActive("/suppliers") ? "secondary" : "ghost"}
                       className="w-full justify-start pl-8"
                       asChild
@@ -941,6 +968,10 @@ export function CollapsedSidebar({ className, onLinkClick }: SidebarProps) {
   }
 
   const isPathActive = (path: string) => {
+    // Special handling for /suppliers to avoid matching /suppliers/analytics
+    if (path === "/suppliers") {
+      return pathname === path || (pathname.startsWith(path + "/") && !pathname.startsWith("/suppliers/analytics"))
+    }
     return pathname === path || pathname.startsWith(path + "/")
   }
 
@@ -1000,11 +1031,12 @@ export function CollapsedSidebar({ className, onLinkClick }: SidebarProps) {
       id: "procurement",
       icon: ShoppingCart,
       label: "Compras",
-      active: isSectionActive(["/compras", "/inventario", "/diesel", "/suppliers"]),
+      active: isSectionActive(["/compras", "/inventario", "/diesel", "/urea", "/suppliers"]),
       items: [
         { href: "/compras", icon: CreditCard, label: "Órdenes de Compra", active: isPathActive("/compras") },
         { href: "/inventario", icon: Boxes, label: "Inventario", active: isPathActive("/inventario") },
         { href: "/diesel", icon: Fuel, label: "Gestión de Diesel", active: isPathActive("/diesel") },
+        { href: "/urea", icon: Droplet, label: "Gestión de UREA", active: isPathActive("/urea") },
         { href: "/suppliers", icon: Users, label: "Padrón de Proveedores", active: isPathActive("/suppliers") },
         { href: "/suppliers/analytics", icon: BarChart3, label: "Análisis de Proveedores", active: isPathActive("/suppliers/analytics") }
       ]

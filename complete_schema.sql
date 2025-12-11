@@ -8874,6 +8874,7 @@ END) STORED,
     "adjustment_reason" "text",
     "adjustment_category" "text",
     "reference_transaction_id" "uuid",
+    "is_transfer" boolean DEFAULT false NOT NULL,
     "source_system" "text" DEFAULT 'manual'::"text",
     "import_batch_id" "text",
     "hours_consumed" integer GENERATED ALWAYS AS (
@@ -8908,6 +8909,9 @@ COMMENT ON COLUMN "public"."diesel_transactions"."previous_balance" IS 'Warehous
 
 
 COMMENT ON COLUMN "public"."diesel_transactions"."current_balance" IS 'Warehouse balance after this transaction (for traceability)';
+
+
+COMMENT ON COLUMN "public"."diesel_transactions"."is_transfer" IS 'Indicates if this transaction is part of a transfer between plants. Transfers should be excluded from consumption reports but still affect inventory.';
 
 
 
@@ -8987,6 +8991,7 @@ CREATE OR REPLACE VIEW "public"."diesel_asset_consumption_summary" AS
              LEFT JOIN "public"."diesel_warehouses" "w" ON (("dt"."warehouse_id" = "w"."id")))
              LEFT JOIN "public"."plants" "p" ON (("w"."plant_id" = "p"."id")))
           WHERE ("dt"."transaction_type" = 'consumption'::"text")
+            AND ("dt"."is_transfer" = false)
           GROUP BY "dt"."asset_id", "a"."name", "a"."asset_id", "dt"."exception_asset_name", "dt"."asset_category", "p"."name"
         )
  SELECT "asset_consumption"."asset_id",
@@ -9050,12 +9055,12 @@ CREATE MATERIALIZED VIEW "public"."diesel_current_inventory" AS
                 END), (0)::numeric) AS "current_stock_liters",
             "count"(
                 CASE
-                    WHEN ("dt"."transaction_type" = 'entry'::"text") THEN 1
+                    WHEN ("dt"."transaction_type" = 'entry'::"text") AND ("dt"."is_transfer" = false) THEN 1
                     ELSE NULL::integer
                 END) AS "total_entries",
             "count"(
                 CASE
-                    WHEN ("dt"."transaction_type" = 'consumption'::"text") THEN 1
+                    WHEN ("dt"."transaction_type" = 'consumption'::"text") AND ("dt"."is_transfer" = false) THEN 1
                     ELSE NULL::integer
                 END) AS "total_consumptions",
             "max"(
@@ -9213,17 +9218,17 @@ CREATE OR REPLACE VIEW "public"."diesel_inventory_detailed" AS
                 END) AS "entries",
             "sum"(
                 CASE
-                    WHEN (("dt"."transaction_type" = 'consumption'::"text") AND ("dt"."asset_category" = 'formal'::"text")) THEN "dt"."quantity_liters"
+                    WHEN (("dt"."transaction_type" = 'consumption'::"text") AND ("dt"."asset_category" = 'formal'::"text") AND ("dt"."is_transfer" = false)) THEN "dt"."quantity_liters"
                     ELSE (0)::numeric
                 END) AS "formal_asset_consumption",
             "sum"(
                 CASE
-                    WHEN (("dt"."transaction_type" = 'consumption'::"text") AND ("dt"."asset_category" = 'exception'::"text")) THEN "dt"."quantity_liters"
+                    WHEN (("dt"."transaction_type" = 'consumption'::"text") AND ("dt"."asset_category" = 'exception'::"text") AND ("dt"."is_transfer" = false)) THEN "dt"."quantity_liters"
                     ELSE (0)::numeric
                 END) AS "exception_asset_consumption",
             "sum"(
                 CASE
-                    WHEN (("dt"."transaction_type" = 'consumption'::"text") AND ("dt"."asset_category" = 'general'::"text")) THEN "dt"."quantity_liters"
+                    WHEN (("dt"."transaction_type" = 'consumption'::"text") AND ("dt"."asset_category" = 'general'::"text") AND ("dt"."is_transfer" = false)) THEN "dt"."quantity_liters"
                     ELSE (0)::numeric
                 END) AS "general_consumption",
             "sum"(
@@ -11191,6 +11196,12 @@ CREATE INDEX "idx_diesel_transactions_validation" ON "public"."diesel_transactio
 
 
 CREATE INDEX "idx_diesel_transactions_warehouse" ON "public"."diesel_transactions" USING "btree" ("warehouse_id");
+
+
+CREATE INDEX "idx_diesel_transactions_is_transfer" ON "public"."diesel_transactions" USING "btree" ("is_transfer") WHERE ("is_transfer" = true);
+
+
+CREATE INDEX "idx_diesel_transactions_reference_transaction_id" ON "public"."diesel_transactions" USING "btree" ("reference_transaction_id") WHERE ("reference_transaction_id" IS NOT NULL);
 
 
 

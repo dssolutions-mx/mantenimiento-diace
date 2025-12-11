@@ -91,6 +91,7 @@ export default function DieselAnalyticsPage() {
   // Summary stats
   const [totalConsumption, setTotalConsumption] = useState(0)
   const [totalEntries, setTotalEntries] = useState(0)
+  const [totalTransfers, setTotalTransfers] = useState(0)
   const [uniqueAssets, setUniqueAssets] = useState(0)
 
   const supabase = createBrowserClient(
@@ -106,20 +107,40 @@ export default function DieselAnalyticsPage() {
     try {
       setLoading(true)
 
-      // Build date filter
+      // Build date filter - filter by diesel product
       let consumptionQuery = supabase
         .from('diesel_transactions')
         .select(`
           *,
-          diesel_warehouses(name),
+          diesel_warehouses!inner(name, product_type),
+          diesel_products!inner(product_type),
           assets(asset_id, name)
         `)
         .eq('transaction_type', 'consumption')
+        .eq('is_transfer', false)
+        .eq('diesel_warehouses.product_type', 'diesel')
+        .eq('diesel_products.product_type', 'diesel')
 
       let entryQuery = supabase
         .from('diesel_transactions')
-        .select('*')
+        .select(`
+          *,
+          diesel_products!inner(product_type)
+        `)
         .eq('transaction_type', 'entry')
+        .eq('is_transfer', false)
+        .eq('diesel_products.product_type', 'diesel')
+
+      // Separate query for transfers (both consumption and entry types)
+      let transferQuery = supabase
+        .from('diesel_transactions')
+        .select(`
+          *,
+          diesel_warehouses!inner(name, product_type, plant_id, plants(code, name)),
+          diesel_products!inner(product_type)
+        `)
+        .eq('is_transfer', true)
+        .eq('diesel_products.product_type', 'diesel')
 
       if (dateFrom) {
         consumptionQuery = consumptionQuery.gte('transaction_date', dateFrom)
@@ -136,8 +157,17 @@ export default function DieselAnalyticsPage() {
       // Get entries
       const { data: entries, error: entriesError } = await entryQuery
 
-      if (consumptionsError || entriesError) {
-        console.error('Error loading analytics:', consumptionsError || entriesError)
+      // Get transfers
+      if (dateFrom) {
+        transferQuery = transferQuery.gte('transaction_date', dateFrom)
+      }
+      if (dateTo) {
+        transferQuery = transferQuery.lte('transaction_date', dateTo + 'T23:59:59')
+      }
+      const { data: transfers, error: transfersError } = await transferQuery
+
+      if (consumptionsError || entriesError || transfersError) {
+        console.error('Error loading analytics:', consumptionsError || entriesError || transfersError)
         toast({
           title: "Error",
           description: "No se pudieron cargar los datos de analíticas",
@@ -447,6 +477,7 @@ export default function DieselAnalyticsPage() {
         const { data: warehouses } = await supabase
           .from('diesel_warehouses')
           .select('id, name')
+          .eq('product_type', 'diesel')
           .in('id', warehouseIds)
 
         if (warehouses) {
@@ -472,8 +503,16 @@ export default function DieselAnalyticsPage() {
       const totalEnt = entries?.reduce((sum, e) => sum + parseFloat(e.quantity_liters), 0) || 0
       const uniqueAst = new Set(consumptions?.map(c => c.asset_id).filter(Boolean)).size
 
+      // Calculate transfer statistics
+      const transferOut = (transfers || []).filter(t => t.transaction_type === 'consumption')
+        .reduce((sum, t) => sum + Number(t.quantity_liters || 0), 0)
+      const transferIn = (transfers || []).filter(t => t.transaction_type === 'entry')
+        .reduce((sum, t) => sum + Number(t.quantity_liters || 0), 0)
+      const totalTransferLiters = transferOut // Net transfers out
+
       setTotalConsumption(totalCons)
       setTotalEntries(totalEnt)
+      setTotalTransfers(totalTransferLiters)
       setUniqueAssets(uniqueAst)
     } catch (error) {
       console.error('Error loading analytics:', error)
@@ -665,6 +704,22 @@ export default function DieselAnalyticsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {totalTransfers > 0 && (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Transferencias</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold text-orange-600">
+                {totalTransfers.toFixed(1)}L
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Excluidas de consumo
+              </p>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Asset Consumption Table */}

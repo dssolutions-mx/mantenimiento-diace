@@ -16,9 +16,10 @@ interface CreateDieselWarehouseDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onCreated?: () => void
+  defaultProductType?: 'diesel' | 'urea'
 }
 
-export function CreateDieselWarehouseDialog({ open, onOpenChange, onCreated }: CreateDieselWarehouseDialogProps) {
+export function CreateDieselWarehouseDialog({ open, onOpenChange, onCreated, defaultProductType = 'diesel' }: CreateDieselWarehouseDialogProps) {
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -30,6 +31,7 @@ export function CreateDieselWarehouseDialog({ open, onOpenChange, onCreated }: C
   // Form state
   const [plants, setPlants] = useState<Array<{ id: string; name: string }>>([])
   const [selectedPlantId, setSelectedPlantId] = useState<string>("")
+  const [productType, setProductType] = useState<'diesel' | 'urea'>(defaultProductType)
   const [warehouseCode, setWarehouseCode] = useState("")
   const [name, setName] = useState("")
   const [capacityLiters, setCapacityLiters] = useState("")
@@ -84,6 +86,7 @@ export function CreateDieselWarehouseDialog({ open, onOpenChange, onCreated }: C
 
   const resetForm = () => {
     setSelectedPlantId("")
+    setProductType(defaultProductType)
     setWarehouseCode("")
     setName("")
     setCapacityLiters("")
@@ -110,6 +113,7 @@ export function CreateDieselWarehouseDialog({ open, onOpenChange, onCreated }: C
         .insert([
           {
             plant_id: selectedPlantId,
+            product_type: productType,
             warehouse_code: warehouseCode.trim(),
             name: name.trim(),
             capacity_liters: parseFloat(capacityLiters),
@@ -145,7 +149,7 @@ export function CreateDieselWarehouseDialog({ open, onOpenChange, onCreated }: C
     <Dialog open={open} onOpenChange={(o) => { if (!o) resetForm(); onOpenChange(o) }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Nuevo Almacén de Diesel</DialogTitle>
+          <DialogTitle>Nuevo Almacén de {productType === 'diesel' ? 'Diesel' : 'UREA'}</DialogTitle>
           <DialogDescription>Registra un nuevo almacén asociado a una planta.</DialogDescription>
         </DialogHeader>
 
@@ -155,6 +159,19 @@ export function CreateDieselWarehouseDialog({ open, onOpenChange, onCreated }: C
               <AlertDescription>{errorMessage}</AlertDescription>
             </Alert>
           )}
+
+          <div className="space-y-2">
+            <Label>Tipo de Producto</Label>
+            <Select value={productType} onValueChange={(value) => setProductType(value as 'diesel' | 'urea')}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="diesel">Diesel</SelectItem>
+                <SelectItem value="urea">UREA</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           <div className="space-y-2">
             <Label>Planta</Label>

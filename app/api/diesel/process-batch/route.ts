@@ -17,12 +17,14 @@ export async function POST(request: NextRequest) {
       plantBatch, 
       meterPreferences,
       meterResolutions,
-      assetMappings 
+      assetMappings,
+      productType = 'diesel' // Default to diesel for backward compatibility
     }: { 
       plantBatch: PlantBatch
       meterPreferences: MeterReconciliationPreferences
       meterResolutions?: Record<string, 'use_diesel' | 'keep_checklist' | 'skip'>
       assetMappings?: Record<string, any>
+      productType?: 'diesel' | 'urea'
     } = body
 
     // Debug: Count enriched rows by type
@@ -92,12 +94,13 @@ export async function POST(request: NextRequest) {
     console.log('[Diesel API] Found plant:', plant)
 
     // Step 2: Resolve warehouse by matching plant and warehouse number in code
-    console.log('[Diesel API] Looking up warehouse for plant:', plant.id, 'warehouse:', plantBatch.warehouse_number)
+    console.log('[Diesel API] Looking up warehouse for plant:', plant.id, 'warehouse:', plantBatch.warehouse_number, 'productType:', productType)
     const warehouseCodePattern = `%${normalizedPlantCode.substring(1)}%-${plantBatch.warehouse_number}`
     const { data: warehouse, error: warehouseError } = await supabase
       .from('diesel_warehouses')
-      .select('id, warehouse_code, name')
+      .select('id, warehouse_code, name, product_type')
       .eq('plant_id', plant.id)
+      .eq('product_type', productType)
       .ilike('warehouse_code', warehouseCodePattern)
       .maybeSingle()
 
@@ -109,29 +112,49 @@ export async function POST(request: NextRequest) {
     }
 
     if (!warehouse) {
-      console.error('[Diesel API] Warehouse not found for plant:', plant.code, 'warehouse:', plantBatch.warehouse_number)
+      console.error('[Diesel API] Warehouse not found for plant:', plant.code, 'warehouse:', plantBatch.warehouse_number, 'productType:', productType)
       return NextResponse.json({ 
-        error: `Warehouse ${plantBatch.warehouse_number} not found for plant ${plant.code}` 
+        error: `Warehouse ${plantBatch.warehouse_number} not found for plant ${plant.code}`,
+        code: 'WAREHOUSE_NOT_FOUND',
+        details: {
+          plant_id: plant.id,
+          plant_code: plant.code,
+          plant_name: plant.name,
+          warehouse_number: plantBatch.warehouse_number,
+          product_type: productType,
+          suggested_warehouse_code: `ALM-${normalizedPlantCode.substring(1)}-${plantBatch.warehouse_number}`,
+          suggested_name: `${plant.name} - ${productType === 'urea' ? 'UREA' : 'Diesel'} - Almacén ${plantBatch.warehouse_number}`
+        }
       }, { status: 404 })
     }
 
     console.log('[Diesel API] Found warehouse:', warehouse)
 
-    // Step 2.5: Get diesel product
-    const { data: dieselProduct, error: productError } = await supabase
+    // Step 2.5: Get product by type
+    const expectedProductCode = productType === 'diesel' ? '07DS01' : '07UR01'
+    const { data: product, error: productError } = await supabase
       .from('diesel_products')
-      .select('id, product_code, name')
-      .eq('product_code', '07DS01')
+      .select('id, product_code, name, product_type')
+      .eq('product_code', expectedProductCode)
+      .eq('product_type', productType)
       .single()
 
-    if (productError || !dieselProduct) {
-      console.error('[Diesel API] Diesel product not found:', productError)
+    if (productError || !product) {
+      console.error(`[Diesel API] ${productType} product not found:`, productError)
       return NextResponse.json({ 
-        error: 'Diesel product (07DS01) not found in database' 
+        error: `${productType === 'diesel' ? 'Diesel' : 'UREA'} product (${expectedProductCode}) not found in database` 
       }, { status: 404 })
     }
 
-    console.log('[Diesel API] Found diesel product:', dieselProduct)
+    console.log(`[Diesel API] Found ${productType} product:`, product)
+    
+    // Verify warehouse product_type matches product
+    if (warehouse && warehouse.product_type !== productType) {
+      console.error('[Diesel API] Warehouse product_type mismatch:', warehouse.product_type, 'vs', productType)
+      return NextResponse.json({ 
+        error: `Warehouse product type (${warehouse.product_type}) does not match selected product type (${productType})` 
+      }, { status: 400 })
+    }
 
     // Step 3: Check for meter conflicts
     const conflicts: MeterConflict[] = []
@@ -411,7 +434,7 @@ export async function POST(request: NextRequest) {
           transaction_id: transactionId,
           plant_id: plant.id,
           warehouse_id: warehouse.id,
-          product_id: dieselProduct.id,
+          product_id: product.id,
           asset_id: assetIdForTransaction,
           asset_category: assetCategory,
           transaction_type: transactionType,

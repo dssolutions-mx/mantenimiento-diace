@@ -57,6 +57,7 @@ import {
   DollarSign
 } from "lucide-react"
 import { Supplier, SupplierService, SupplierContact } from "@/types/suppliers"
+import { createClient } from "@/lib/supabase"
 import { SupplierForm } from "./SupplierForm"
 import { SupplierDetails } from "./SupplierDetails"
 import { SupplierPerformanceChart } from "./SupplierPerformanceChart"
@@ -96,12 +97,46 @@ export function SupplierRegistry({
   const loadSuppliers = async () => {
     setLoading(true)
     try {
-      // TODO: Replace with actual API call
-      const response = await fetch(`/api/suppliers?status=${statusFilter}&type=${typeFilter}`)
-      const data = await response.json()
-      setSuppliers(data.suppliers || [])
+      const supabase = createClient()
+
+      let query = supabase
+        .from('suppliers')
+        .select(`
+          id,
+          name,
+          business_name,
+          contact_person,
+          supplier_type,
+          status,
+          rating,
+          total_orders,
+          avg_order_amount,
+          reliability_score,
+          created_at
+        `)
+
+      if (statusFilter !== 'all') {
+        query = query.eq('status', statusFilter)
+      }
+
+      if (typeFilter !== 'all') {
+        query = query.eq('supplier_type', typeFilter)
+      }
+
+      const { data, error } = await query
+        .order('rating', { ascending: false, nullsLast: false })
+        .order('name', { ascending: true })
+
+      if (error) {
+        console.error('Error loading suppliers:', error)
+        setSuppliers([])
+        return
+      }
+
+      setSuppliers(data || [])
     } catch (error) {
       console.error('Error loading suppliers:', error)
+      setSuppliers([])
     } finally {
       setLoading(false)
     }

@@ -116,13 +116,34 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
   // Local state
   const [isLoading, setIsLoading] = useState(false)
   const [formalAssets, setFormalAssets] = useState<FormalAsset[]>([])
-  const [mappingDecisions, setMappingDecisions] = useState<Map<string, MappingDecision>>(new Map())
   const [searchTerm, setSearchTerm] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'mapped'>('all')
   const [selectedAsset, setSelectedAsset] = useState<string | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [currentMapping, setCurrentMapping] = useState<MappingDecision | null>(null)
   const [assetListSearch, setAssetListSearch] = useState('')
+  
+  // Derive mappingDecisions from store's pendingMappings to avoid state sync issues
+  const mappingDecisions = useMemo(() => {
+    const decisions = new Map<string, MappingDecision>()
+    for (const [name, resolution] of pendingMappings.entries()) {
+      decisions.set(name, {
+        originalName: name,
+        decision: resolution.resolution_type === 'formal' ? 'formal' :
+                 resolution.resolution_type === 'exception' ? 'exception' :
+                 resolution.resolution_type === 'general' ? 'general' : 'ignore',
+        targetAssetId: resolution.asset_id || undefined,
+        targetAssetName: resolution.asset_name || undefined,
+        exceptionDetails: resolution.exception_asset_name ? {
+          assetType: 'unknown',
+          description: resolution.exception_asset_name
+        } : undefined,
+        confidence: resolution.confidence,
+        notes: resolution.mapping_notes || undefined
+      })
+    }
+    return decisions
+  }, [pendingMappings])
   
   // Manual list filter for formal assets in dialog
   const filteredFormalAssets = useMemo(() => {
@@ -340,36 +361,38 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
 
   // Open mapping dialog
   const openMappingDialog = useCallback((assetName: string) => {
-    const existing = mappingDecisions.get(assetName)
-    const suggestions = getAssetSuggestions(assetName)
-    const isAdjustment = isAdjustmentEntry(assetName)
+    // Normalize the asset name (trim) to match how it's stored
+    const normalizedName = assetName.trim()
+    const existing = mappingDecisions.get(normalizedName)
+    const suggestions = getAssetSuggestions(normalizedName)
+    const isAdjustment = isAdjustmentEntry(normalizedName)
     
     // Auto-classify adjustments as "general" (inventory adjustments)
     if (isAdjustment && !existing) {
       setCurrentMapping({
-        originalName: assetName,
+        originalName: normalizedName, // Use normalized name
         decision: 'general',
         confidence: 0.95,
         notes: 'Ajuste de inventario detectado automáticamente',
         exceptionDetails: {
           assetType: 'utility',
-          description: `Ajuste de inventario: ${assetName}`
+          description: `Ajuste de inventario: ${normalizedName}`
         }
       })
     } else {
       setCurrentMapping(existing || {
-        originalName: assetName,
+        originalName: normalizedName, // Use normalized name
         decision: suggestions.length > 0 && suggestions[0].similarity_score > 0.8 ? 'formal' : 'exception',
         confidence: 0.7,
         targetAssetId: suggestions.length > 0 && suggestions[0].similarity_score > 0.8 ? suggestions[0].asset_id : undefined,
         targetAssetName: suggestions.length > 0 && suggestions[0].similarity_score > 0.8 ? suggestions[0].asset_name : undefined,
         exceptionDetails: {
           assetType: 'unknown',
-          description: `Activo externo: ${assetName}`
+          description: `Activo externo: ${normalizedName}`
         }
       })
     }
-    setSelectedAsset(assetName)
+    setSelectedAsset(normalizedName)
     setIsDialogOpen(true)
   }, [mappingDecisions, getAssetSuggestions, isAdjustmentEntry])
 
@@ -377,11 +400,11 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
   const saveMappingDecision = useCallback(() => {
     if (!currentMapping) return
     
-    const newDecisions = new Map(mappingDecisions)
-    newDecisions.set(currentMapping.originalName, currentMapping)
-    setMappingDecisions(newDecisions)
+    // Normalize the asset name (trim) to match how it's stored in uniqueAssetNames
+    const normalizedName = currentMapping.originalName.trim()
     
-    // Add to pending mappings in store
+    // Add to pending mappings in store (use normalized name)
+    // The UI will automatically update since mappingDecisions is derived from pendingMappings
     const resolution: AssetResolution = {
       resolution_type: currentMapping.decision === 'general' ? 'general' : 
                       currentMapping.decision === 'formal' ? 'formal' : 
@@ -393,20 +416,23 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
       confidence: currentMapping.confidence,
       created_new: false,
       mapping_notes: currentMapping.notes || null,
-      original_name: currentMapping.originalName
+      original_name: normalizedName,
+      asset_category: currentMapping.decision === 'formal' ? 'formal' :
+                     currentMapping.decision === 'exception' ? 'exception' :
+                     currentMapping.decision === 'general' ? 'general' : null
     }
     
-    addPendingMapping(currentMapping.originalName, resolution)
+    addPendingMapping(normalizedName, resolution)
     
     setIsDialogOpen(false)
     setCurrentMapping(null)
     setSelectedAsset(null)
     
-    // Update progress
+    // Update progress based on store's pendingMappings (will be +1 after this save)
     const totalAssets = uniqueAssetNames.length
-    const mappedAssets = newDecisions.size
+    const mappedAssets = pendingMappings.size + 1 // +1 for the one we just added
     setMappingProgress((mappedAssets / totalAssets) * 100)
-  }, [currentMapping, mappingDecisions, addPendingMapping, uniqueAssetNames.length, setMappingProgress])
+  }, [currentMapping, addPendingMapping, uniqueAssetNames.length, setMappingProgress, pendingMappings.size])
 
   // Auto-map high confidence matches
   const autoMapHighConfidence = useCallback(async () => {
@@ -414,26 +440,13 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
     let autoMapped = 0
     
     try {
-      const newDecisions = new Map(mappingDecisions)
-      
       for (const asset of uniqueAssetNames) {
-        if (mappingDecisions.has(asset.name)) continue // Already mapped
+        if (pendingMappings.has(asset.name)) continue // Already mapped
         
         const suggestions = getAssetSuggestions(asset.name)
         const bestMatch = suggestions[0]
         
         if (bestMatch && bestMatch.similarity_score >= 0.9) {
-          const decision: MappingDecision = {
-            originalName: asset.name,
-            decision: 'formal',
-            targetAssetId: bestMatch.asset_id,
-            targetAssetName: bestMatch.asset_name,
-            confidence: bestMatch.similarity_score,
-            notes: 'Auto-mapped (high confidence)'
-          }
-          
-          newDecisions.set(asset.name, decision)
-          
           const resolution: AssetResolution = {
             resolution_type: 'formal',
             asset_id: bestMatch.asset_id,
@@ -443,7 +456,8 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
             confidence: bestMatch.similarity_score,
             created_new: false,
             mapping_notes: 'Auto-mapped based on high similarity',
-            original_name: asset.name
+            original_name: asset.name,
+            asset_category: 'formal'
           }
           
           addPendingMapping(asset.name, resolution)
@@ -451,11 +465,9 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
         }
       }
       
-      setMappingDecisions(newDecisions)
-      
-      // Update progress
+      // Update progress (UI will auto-update since mappingDecisions derives from pendingMappings)
       const totalAssets = uniqueAssetNames.length
-      const mappedAssets = newDecisions.size
+      const mappedAssets = pendingMappings.size + autoMapped
       setMappingProgress((mappedAssets / totalAssets) * 100)
       
       if (autoMapped > 0) {
@@ -489,7 +501,7 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
     } finally {
       setIsLoading(false)
     }
-  }, [mappingDecisions, uniqueAssetNames, getAssetSuggestions, addPendingMapping, setMappingProgress, addNotification, addError])
+  }, [pendingMappings, uniqueAssetNames, getAssetSuggestions, addPendingMapping, setMappingProgress, addNotification, addError])
 
   // Submit all mappings
   const handleSubmitMappings = useCallback(async () => {
@@ -537,6 +549,9 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
   useEffect(() => {
     loadFormalAssets()
   }, [loadFormalAssets])
+  
+  // Note: Mappings are managed in local state (mappingDecisions) and synced to store when saved
+  // The store's pendingMappings is used during processing, not for UI state
 
   const mappingProgress = uniqueAssetNames.length > 0 ? (mappingDecisions.size / uniqueAssetNames.length) * 100 : 0
   const isComplete = mappingDecisions.size === uniqueAssetNames.length
@@ -696,21 +711,9 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
                 variant="secondary"
                 onClick={() => {
                   // Auto-map all adjustments as "general"
-                  const newDecisions = new Map(mappingDecisions)
                   let count = 0
                   filteredAssets.forEach(asset => {
-                    if (isAdjustmentEntry(asset.name) && !newDecisions.has(asset.name)) {
-                      newDecisions.set(asset.name, {
-                        originalName: asset.name,
-                        decision: 'general',
-                        confidence: 0.95,
-                        notes: 'Ajuste de inventario detectado automáticamente',
-                        exceptionDetails: {
-                          assetType: 'utility',
-                          description: `Ajuste de inventario: ${asset.name}`
-                        }
-                      })
-                      
+                    if (isAdjustmentEntry(asset.name) && !pendingMappings.has(asset.name)) {
                       const resolution: AssetResolution = {
                         resolution_type: 'general',
                         asset_id: null,
@@ -720,13 +723,17 @@ export function AssetMapper({ onMappingComplete, onProceedToProcessing }: AssetM
                         confidence: 0.95,
                         created_new: false,
                         mapping_notes: 'Ajuste de inventario detectado automáticamente',
-                        original_name: asset.name
+                        original_name: asset.name,
+                        asset_category: 'general'
                       }
                       addPendingMapping(asset.name, resolution)
                       count++
                     }
                   })
-                  setMappingDecisions(newDecisions)
+                  // Update progress
+                  const totalAssets = uniqueAssetNames.length
+                  const mappedAssets = pendingMappings.size + count
+                  setMappingProgress((mappedAssets / totalAssets) * 100)
                   addNotification({
                     title: 'Ajustes Mapeados',
                     message: `${count} ajustes de inventario clasificados automáticamente`,

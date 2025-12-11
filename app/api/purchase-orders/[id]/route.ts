@@ -88,11 +88,39 @@ export async function PATCH(
             // fallback to empty array for invalid types
             updateData[field] = []
           }
+        } else if (field === 'purchase_date' || field === 'max_payment_date') {
+          // Handle date fields - convert empty strings to null, ensure proper format
+          const value = body[field]
+          if (value === null || value === '' || value === undefined) {
+            updateData[field] = null
+          } else {
+            // Handle both YYYY-MM-DD format (from date inputs) and ISO format
+            let dateValue: Date
+            if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+              // YYYY-MM-DD format - create date at midnight UTC
+              dateValue = new Date(value + 'T00:00:00.000Z')
+            } else {
+              // Try parsing as ISO or other date format
+              dateValue = new Date(value)
+            }
+            
+            if (isNaN(dateValue.getTime())) {
+              console.warn(`Invalid date value for ${field}:`, value)
+              // Skip invalid dates - don't include in updateData
+            } else {
+              updateData[field] = dateValue.toISOString()
+            }
+          }
         } else {
           updateData[field] = body[field]
         }
       }
     })
+
+    // Remove posting_date if it was accidentally included (it's a generated column)
+    if ('posting_date' in updateData) {
+      delete updateData.posting_date
+    }
 
     // Handle receipt upload separately - prevent duplicates
     if (body.receipt_url) {
@@ -136,6 +164,13 @@ export async function PATCH(
 
       if (error) {
         console.error('Error updating purchase order:', error)
+        console.error('Update data:', JSON.stringify(updateData, null, 2))
+        console.error('Error details:', {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code
+        })
         // Map specific validation related to payment date when method is transfer
         if (
           typeof error.message === 'string' &&
@@ -149,7 +184,21 @@ export async function PATCH(
             fix_type: 'payment_date'
           }, { status: 400 })
         }
-        return NextResponse.json({ error: 'Failed to update purchase order', details: error.message }, { status: 500 })
+        // Check for generated column errors
+        if (
+          typeof error.message === 'string' &&
+          (error.message.includes('posting_date') || error.message.includes('cannot be updated'))
+        ) {
+          return NextResponse.json({ 
+            error: 'No se puede actualizar posting_date directamente', 
+            details: 'La fecha de publicación se calcula automáticamente basada en purchase_date, actual_delivery_date, approval_date o created_at.' 
+          }, { status: 400 })
+        }
+        return NextResponse.json({ 
+          error: 'Failed to update purchase order', 
+          details: error.message || 'Unknown error',
+          code: error.code
+        }, { status: 500 })
       }
       // Cascade: if actual_amount provided and PO is linked to a work order or service order, update related totals
       try {
@@ -200,8 +249,14 @@ export async function PATCH(
       message: 'Purchase order updated successfully'
     })
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error in PATCH /api/purchase-orders/[id]:', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    console.error('Error stack:', error?.stack)
+    console.error('Request body:', body)
+    return NextResponse.json({ 
+      error: 'Internal server error', 
+      details: error?.message || 'Unknown error',
+      type: error?.name || 'Error'
+    }, { status: 500 })
   }
 } 

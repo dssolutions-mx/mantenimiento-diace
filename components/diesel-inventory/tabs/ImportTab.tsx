@@ -24,13 +24,14 @@ import { useDieselStore } from '@/store/diesel-store'
 import { DieselExcelRow } from '@/types/diesel'
 
 interface ImportTabProps {
+  productType: 'diesel' | 'urea'
   onProceedToMapping?: () => void
   onProceedToProcessing?: () => void
 }
 
 type ImportStep = 'upload' | 'preview' | 'ready'
 
-export function ImportTab({ onProceedToMapping, onProceedToProcessing }: ImportTabProps) {
+export function ImportTab({ productType, onProceedToMapping, onProceedToProcessing }: ImportTabProps) {
   const {
     uploadedFile,
     parsedData,
@@ -286,6 +287,7 @@ export function ImportTab({ onProceedToMapping, onProceedToProcessing }: ImportT
         {/* Step 1: File Upload */}
         {actualStep === 'upload' && (
           <ExcelUploader
+            productType={productType}
             onDataParsed={handleDataParsed}
             onBatchCreated={handleBatchCreated}
           />

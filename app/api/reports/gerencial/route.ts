@@ -93,7 +93,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Fetch diesel transactions with asset info
+    // Fetch diesel transactions with asset info (only diesel, not urea, exclude transfers)
+    // CRITICAL: Exclude transfers (is_transfer = true) from consumption reports
+    // Transfers are inventory movements between plants, not actual consumption
     let dieselQuery = supabase
       .from('diesel_transactions')
       .select(`
@@ -105,8 +107,12 @@ export async function POST(req: NextRequest) {
         product_id,
         transaction_date,
         horometer_reading,
-        previous_horometer
+        previous_horometer,
+        is_transfer,
+        diesel_warehouses!inner(product_type)
       `)
+      .eq('diesel_warehouses.product_type', 'diesel')
+      .neq('is_transfer', true) // Explicitly exclude transfers (is_transfer = true)
       .gte('transaction_date', dateFrom)
       .lt('transaction_date', dateToExclusiveStr)
 
@@ -465,6 +471,11 @@ export async function POST(req: NextRequest) {
       checklistEventsByAsset.get(h.asset_id)!.push({ ts, val })
     })
     ;(dieselTxs || []).forEach(tx => {
+      // CRITICAL: Double-check to exclude transfers (defense in depth)
+      if (tx.is_transfer === true) {
+        console.warn(`[Gerencial Report] Skipping transfer transaction: ${tx.id}`)
+        return
+      }
       if (tx.transaction_type !== 'consumption' || !tx.asset_id) return
       if (!dieselByAsset.has(tx.asset_id)) dieselByAsset.set(tx.asset_id, [])
       dieselByAsset.get(tx.asset_id)!.push(tx)

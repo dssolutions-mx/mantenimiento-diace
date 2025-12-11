@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase-server'
 import { SupplierAnalytics } from '@/types/suppliers'
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = createClient()
+    const supabase = await createClient()
 
     // Get query parameters
     const { searchParams } = new URL(request.url)
@@ -56,13 +56,10 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Get purchase orders data for cost analysis
+    // Get purchase orders data for cost analysis - need to get orders linked by supplier_id OR supplier name
     const { data: purchaseOrders, error: poError } = await supabase
       .from('purchase_orders')
-      .select(`
-        *,
-        supplier:suppliers(*)
-      `)
+      .select('id, order_id, supplier_id, supplier, total_amount, actual_amount, created_at, purchase_date, po_type, status')
       .gte('created_at', startDate.toISOString())
       .lte('created_at', endDate.toISOString())
 
@@ -70,8 +67,33 @@ export async function GET(request: NextRequest) {
       console.error('Error fetching purchase orders:', poError)
     }
 
+    // Create a map of supplier names to supplier IDs for matching legacy purchase orders
+    const supplierNameMap = new Map<string, string>()
+    suppliers?.forEach(s => {
+      if (s.name) supplierNameMap.set(s.name.toLowerCase().trim(), s.id)
+      if (s.business_name) supplierNameMap.set(s.business_name.toLowerCase().trim(), s.id)
+    })
+
+    // Link purchase orders to suppliers
+    const purchaseOrdersWithSuppliers = (purchaseOrders || []).map(po => {
+      let linkedSupplierId = po.supplier_id
+      
+      // If no supplier_id but has supplier name, try to match
+      if (!linkedSupplierId && po.supplier) {
+        const matchedId = supplierNameMap.get(po.supplier.toLowerCase().trim())
+        if (matchedId) {
+          linkedSupplierId = matchedId
+        }
+      }
+      
+      return {
+        ...po,
+        linked_supplier_id: linkedSupplierId
+      }
+    })
+
     // Calculate analytics
-    const analytics = await calculateSupplierAnalytics(suppliers || [], purchaseOrders || [])
+    const analytics = await calculateSupplierAnalytics(suppliers || [], purchaseOrdersWithSuppliers || [])
 
     return NextResponse.json({
       analytics,
@@ -130,7 +152,7 @@ async function calculateSupplierAnalytics(suppliers: any[], purchaseOrders: any[
     })
     .slice(0, 5)
 
-  // Cost analysis by supplier type
+  // Cost analysis by supplier type - also count purchase orders per supplier
   const suppliersByType = suppliers.reduce((acc, supplier) => {
     const type = supplier.supplier_type || 'unknown'
     if (!acc[type]) {
@@ -143,14 +165,29 @@ async function calculateSupplierAnalytics(suppliers: any[], purchaseOrders: any[
       }
     }
     acc[type].count++
-    acc[type].suppliers.push(supplier)
+    
+    // Count purchase orders for this supplier
+    const supplierPOs = purchaseOrders.filter(po => 
+      po.linked_supplier_id === supplier.id
+    )
+    const supplierTotalAmount = supplierPOs.reduce((sum, po) => sum + (Number(po.total_amount) || Number(po.actual_amount) || 0), 0)
+    
+    acc[type].total_orders += supplierPOs.length
+    acc[type].total_amount += supplierTotalAmount
+    acc[type].suppliers.push({
+      ...supplier,
+      _po_count: supplierPOs.length,
+      _po_amount: supplierTotalAmount
+    })
     return acc
   }, {} as Record<string, any>)
 
   // Calculate averages for each type
   Object.keys(suppliersByType).forEach(type => {
     const typeData = suppliersByType[type]
-    typeData.average_rating = typeData.suppliers.reduce((sum: number, s: any) => sum + (s.rating || 0), 0) / typeData.count
+    if (typeData.count > 0) {
+      typeData.average_rating = typeData.suppliers.reduce((sum: number, s: any) => sum + (s.rating || 0), 0) / typeData.count
+    }
   })
 
   // Cost analysis
@@ -201,15 +238,62 @@ async function calculateSupplierAnalytics(suppliers: any[], purchaseOrders: any[
   }
 }
 
-async function calculateReliabilityTrends(suppliers: any[]) {
-  // For now, return mock data structure
-  // In a real implementation, this would calculate monthly trends from performance history
-  const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
-  const currentMonth = new Date().getMonth()
+async function calculateReliabilityTrends(suppliers: any[]): Promise<Array<{ month: string; average_score: number; order_count: number }>> {
+  // Calculate real reliability trends from supplier performance history
+  const supabase = await createClient()
+  const endDate = new Date()
+  const startDate = new Date()
+  startDate.setFullYear(endDate.getFullYear() - 1)
+  
+  // Get all performance history records for the last year
+  const { data: performanceHistory, error } = await supabase
+    .from('supplier_performance_history')
+    .select('supplier_id, order_date, delivery_rating, quality_rating, service_rating')
+    .gte('order_date', startDate.toISOString())
+    .order('order_date', { ascending: true })
 
-  return months.slice(0, 12).map((month, index) => ({
-    month,
-    average_score: Math.round(70 + Math.random() * 25),
-    order_count: Math.floor(5 + Math.random() * 15)
-  }))
+  if (error || !performanceHistory || performanceHistory.length === 0) {
+    // Return empty structure if no data
+    return []
+  }
+
+  // Group by month
+  const monthlyData = new Map<string, { scores: number[], orderCount: number }>()
+  
+  performanceHistory.forEach(record => {
+    const date = new Date(record.order_date)
+    const monthKey = date.toLocaleDateString('es-MX', { month: 'short', year: '2-digit' })
+    
+    if (!monthlyData.has(monthKey)) {
+      monthlyData.set(monthKey, { scores: [], orderCount: 0 })
+    }
+    
+    const monthData = monthlyData.get(monthKey)!
+    monthData.orderCount++
+    
+    // Calculate reliability score from delivery_rating (1-5 scale, convert to percentage)
+    if (record.delivery_rating) {
+      monthData.scores.push((record.delivery_rating / 5) * 100)
+    } else if (record.quality_rating && record.service_rating) {
+      // Fallback: use average of quality and service ratings
+      const avgRating = (record.quality_rating + record.service_rating) / 2
+      monthData.scores.push((avgRating / 5) * 100)
+    }
+  })
+
+  // Convert to array format
+  return Array.from(monthlyData.entries())
+    .map(([month, data]) => ({
+      month,
+      average_score: data.scores.length > 0 
+        ? Math.round(data.scores.reduce((a, b) => a + b, 0) / data.scores.length)
+        : 0,
+      order_count: data.orderCount
+    }))
+    .sort((a, b) => {
+      // Sort by date
+      const dateA = new Date(`01 ${a.month}`)
+      const dateB = new Date(`01 ${b.month}`)
+      return dateA.getTime() - dateB.getTime()
+    })
 }

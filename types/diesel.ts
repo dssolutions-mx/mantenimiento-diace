@@ -1,5 +1,8 @@
 // Diesel Inventory Types
 
+// Product type for multi-product support
+export type ProductType = 'diesel' | 'urea'
+
 // Movement categories
 export type MovementCategory = 
   | 'inventory_opening'      // Entrada, no unit, no liters, has INVENTARIO INICIAL
@@ -144,6 +147,7 @@ export interface AssetResolution {
   confidence: number;
   created_new: boolean;
   mapping_notes: string | null;
+  asset_category?: 'formal' | 'exception' | 'general' | null;
 }
 
 export interface ProcessingError {

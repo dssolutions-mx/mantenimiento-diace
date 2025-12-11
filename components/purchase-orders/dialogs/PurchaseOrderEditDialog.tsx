@@ -37,6 +37,18 @@ export function PurchaseOrderEditDialog({ open, onOpenChange, purchaseOrderId, i
 
   useEffect(() => {
     if (open) {
+      // Helper to convert ISO date string to YYYY-MM-DD format for date inputs
+      const formatDateForInput = (dateValue: string | null | undefined): string => {
+        if (!dateValue) return ""
+        try {
+          const date = new Date(dateValue)
+          if (isNaN(date.getTime())) return ""
+          return date.toISOString().slice(0, 10)
+        } catch {
+          return ""
+        }
+      }
+
       setForm({
         supplier: initialData.supplier ?? "",
         total_amount: initialData.total_amount ?? 0,
@@ -44,8 +56,8 @@ export function PurchaseOrderEditDialog({ open, onOpenChange, purchaseOrderId, i
         notes: initialData.notes ?? "",
         store_location: initialData.store_location ?? "",
         service_provider: initialData.service_provider ?? "",
-        purchase_date: initialData.purchase_date ?? "",
-        max_payment_date: initialData.max_payment_date ?? "",
+        purchase_date: formatDateForInput(initialData.purchase_date),
+        max_payment_date: formatDateForInput(initialData.max_payment_date),
       })
       setItems(Array.isArray(initialData.items) ? initialData.items : [])
     }
@@ -82,11 +94,19 @@ export function PurchaseOrderEditDialog({ open, onOpenChange, purchaseOrderId, i
   const handleSave = async () => {
     try {
       setIsSaving(true)
+      
+      // Prepare payload, converting empty date strings to null
       const payload: PurchaseOrderEditable = {
-        ...form,
-        items,
-        // If total is empty, compute from items
-        total_amount: typeof form.total_amount === 'number' && form.total_amount > 0 ? form.total_amount : totalCalculated
+        supplier: form.supplier || null,
+        total_amount: typeof form.total_amount === 'number' && form.total_amount > 0 ? form.total_amount : totalCalculated,
+        payment_method: form.payment_method || null,
+        notes: form.notes || null,
+        store_location: form.store_location || null,
+        service_provider: form.service_provider || null,
+        // Convert empty date strings to null, keep valid dates as-is (API will convert to ISO)
+        purchase_date: form.purchase_date && form.purchase_date.trim() ? form.purchase_date : null,
+        max_payment_date: form.max_payment_date && form.max_payment_date.trim() ? form.max_payment_date : null,
+        items: items.length > 0 ? items : null
       }
 
       const res = await fetch(`/api/purchase-orders/${purchaseOrderId}`, {
@@ -95,7 +115,10 @@ export function PurchaseOrderEditDialog({ open, onOpenChange, purchaseOrderId, i
         body: JSON.stringify(payload)
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data?.error || 'Error al guardar cambios')
+      if (!res.ok) {
+        const errorMessage = data?.details || data?.error || 'Error al guardar cambios'
+        throw new Error(errorMessage)
+      }
 
       toast({ title: 'Orden actualizada', description: 'Los cambios se guardaron correctamente.' })
       onOpenChange(false)

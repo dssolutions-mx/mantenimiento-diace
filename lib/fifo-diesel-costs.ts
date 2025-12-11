@@ -35,10 +35,11 @@ export async function calculateDieselCostsFIFO(
   const reportStartDateISO = `${dateFromStr}T00:00:00.000Z`
   const reportEndDateISO = `${dateToStr}T23:59:59.999Z`
   
-  // Get warehouse IDs for target plants
+  // Get warehouse IDs for target plants (only diesel warehouses)
   const { data: warehouses } = await supabase
     .from('diesel_warehouses')
     .select('id, plant_id, plants(code)')
+    .eq('product_type', 'diesel')
   
   const warehouseToPlantCode = new Map<string, string>()
   const targetWarehouseIds: string[] = []
@@ -55,9 +56,12 @@ export async function calculateDieselCostsFIFO(
   }
 
   // Fetch entries from last 45 days
+  // Include both regular entries AND transfer-in entries (they carry forward cost basis)
+  // Transfer-in entries preserve the cost basis from the source plant (e.g., Plant 4)
+  // When diesel is consumed later at the receiving plant, it uses this preserved price
   const { data: allEntries } = await supabase
     .from('diesel_transactions')
-    .select(`id, warehouse_id, product_id, quantity_liters, unit_cost, transaction_date`)
+    .select(`id, warehouse_id, product_id, quantity_liters, unit_cost, transaction_date, is_transfer`)
     .eq('transaction_type', 'entry')
     .gte('transaction_date', entriesStartDateISO)
     .lte('transaction_date', dateToEndISO)
@@ -66,9 +70,15 @@ export async function calculateDieselCostsFIFO(
     .gt('unit_cost', 0)
     .order('transaction_date', { ascending: true })
 
-  const entriesWithPrice = (allEntries || []).filter(tx => tx.unit_cost && Number(tx.unit_cost) > 0)
+  // Include both regular entries (is_transfer = false/null) and transfer-in entries (is_transfer = true)
+  // Both types add to FIFO inventory lots with their unit_cost
+  const entriesWithPrice = (allEntries || []).filter(tx => 
+    tx.unit_cost && Number(tx.unit_cost) > 0
+  )
 
   // Fetch consumptions from same date range as entries
+  // Exclude transfer-out consumptions (they don't consume from FIFO inventory)
+  // Transfer-out consumptions are inventory movements, not actual consumption
   const consumptionQueryStart = new Date(dateFromStr)
   consumptionQueryStart.setDate(consumptionQueryStart.getDate() - 45)
   consumptionQueryStart.setHours(0, 0, 0, 0)
@@ -78,6 +88,7 @@ export async function calculateDieselCostsFIFO(
     .from('diesel_transactions')
     .select(`id, warehouse_id, product_id, quantity_liters, transaction_date`)
     .eq('transaction_type', 'consumption')
+    .eq('is_transfer', false) // Exclude transfer-out consumptions from FIFO
     .gte('transaction_date', consumptionQueryStartISO)
     .lte('transaction_date', reportEndDateISO)
     .in('warehouse_id', targetWarehouseIds)

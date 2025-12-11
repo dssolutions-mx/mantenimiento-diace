@@ -9,6 +9,7 @@ export default function DieselEntryPage() {
   return (
     <div className="container max-w-4xl mx-auto py-6 px-4">
       <DieselEntryForm
+        productType="diesel"
         onSuccess={(transactionId) => {
           console.log('Entry created:', transactionId)
           router.push('/diesel')

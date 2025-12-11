@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createServerSupabase } from '@/lib/supabase-server'
 import { createClient } from '@supabase/supabase-js'
 
+// Optional debug flag to trace Plant 4 warehouse transactions
+const p004WarehouseDebug: string | undefined = process.env.P004_WAREHOUSE_DEBUG?.trim() || undefined
+
 type Body = {
   month: string // YYYY-MM format
   businessUnitId?: string | null
@@ -33,10 +36,11 @@ async function calculateDieselCostsFIFO_IngresosGastos(
   const fifoStartDateISO = fifoStartDate.toISOString()
   const dateToEndISO = dateToEnd.toISOString()
   
-  // Get warehouse IDs for target plants
+  // Get warehouse IDs for target plants (only diesel warehouses)
   const { data: warehouses, error: warehousesError } = await supabase
     .from('diesel_warehouses')
     .select('id, plant_id, plants(code)')
+    .eq('product_type', 'diesel')
   
   if (warehousesError) {
     console.error('[FIFO] Error fetching warehouses:', warehousesError)
@@ -66,6 +70,9 @@ async function calculateDieselCostsFIFO_IngresosGastos(
   entriesStartDate.setHours(0, 0, 0, 0)
   const entriesStartDateISO = entriesStartDate.toISOString()
   
+  // UPDATED: Include BOTH regular entries AND transfer-in entries
+  // Transfer-in entries now have FIFO-calculated prices that should be used for costing
+  // This ensures diesel transferred from Plant 4 to other plants carries its cost basis
   const { data: allEntries, error: entriesError } = await supabase
     .from('diesel_transactions')
     .select(`
@@ -74,9 +81,12 @@ async function calculateDieselCostsFIFO_IngresosGastos(
       product_id, 
       quantity_liters, 
       unit_cost, 
-      transaction_date
+      transaction_date,
+      is_transfer
     `)
     .eq('transaction_type', 'entry')
+    // Include both regular entries (is_transfer = false) AND transfer-in entries (is_transfer = true)
+    // Both contribute to FIFO inventory with their unit_cost
     .gte('transaction_date', entriesStartDateISO)
     .lte('transaction_date', dateToEndISO)
     .in('warehouse_id', targetWarehouseIds)
@@ -89,6 +99,22 @@ async function calculateDieselCostsFIFO_IngresosGastos(
   }
 
   const entriesWithPrice = (allEntries || []).filter(tx => tx.unit_cost && Number(tx.unit_cost) > 0)
+  
+  // Debug: Log entries by plant
+  const entriesByPlant = new Map<string, { count: number, liters: number, hasPrice: number }>()
+  ;(allEntries || []).forEach(entry => {
+    const plantCode = warehouseToPlantCode.get(entry.warehouse_id) || 'UNKNOWN'
+    if (!entriesByPlant.has(plantCode)) {
+      entriesByPlant.set(plantCode, { count: 0, liters: 0, hasPrice: 0 })
+    }
+    const stat = entriesByPlant.get(plantCode)!
+    stat.count++
+    stat.liters += Number(entry.quantity_liters || 0)
+    if (entry.unit_cost && Number(entry.unit_cost) > 0) {
+      stat.hasPrice++
+    }
+  })
+  console.log('[FIFO] Entries by plant:', Object.fromEntries(entriesByPlant))
 
   // STEP 2: Fetch consumptions - FLEXIBLE for calculation, STRICT for cost counting
   // We fetch consumptions from the SAME date range as entries to ensure proper FIFO processing
@@ -105,26 +131,68 @@ async function calculateDieselCostsFIFO_IngresosGastos(
   consumptionQueryStart.setHours(0, 0, 0, 0)
   const consumptionQueryStartISO = consumptionQueryStart.toISOString()
   
-  const { data: allConsumptions, error: consumptionsError } = await supabase
+  // First, let's see what's actually in the database WITHOUT any is_transfer filter
+  // This helps debug whether transfers are properly marked
+  const { data: allConsumptionsUnfiltered, error: consumptionsUnfilteredError } = await supabase
     .from('diesel_transactions')
     .select(`
       id, 
       warehouse_id, 
       product_id, 
       quantity_liters, 
-      transaction_date
+      transaction_date,
+      is_transfer
     `)
     .eq('transaction_type', 'consumption')
-    .gte('transaction_date', consumptionQueryStartISO) // FLEXIBLE: Include some before period for context
+    .gte('transaction_date', consumptionQueryStartISO)
     .lte('transaction_date', reportEndDateISO)
     .in('warehouse_id', targetWarehouseIds)
     .order('transaction_date', { ascending: true })
+
+  // Debug: Count transfers vs non-transfers in raw data
+  const transferCounts = new Map<string, { total: number, isTransferTrue: number, isTransferFalse: number, isTransferNull: number, litersTransfer: number, litersNonTransfer: number }>()
+  ;(allConsumptionsUnfiltered || []).forEach(cons => {
+    const plantCode = warehouseToPlantCode.get(cons.warehouse_id) || 'UNKNOWN'
+    if (!transferCounts.has(plantCode)) {
+      transferCounts.set(plantCode, { total: 0, isTransferTrue: 0, isTransferFalse: 0, isTransferNull: 0, litersTransfer: 0, litersNonTransfer: 0 })
+    }
+    const stat = transferCounts.get(plantCode)!
+    stat.total++
+    const liters = Number(cons.quantity_liters || 0)
+    if (cons.is_transfer === true) {
+      stat.isTransferTrue++
+      stat.litersTransfer += liters
+    } else if (cons.is_transfer === false) {
+      stat.isTransferFalse++
+      stat.litersNonTransfer += liters
+    } else {
+      stat.isTransferNull++
+      stat.litersNonTransfer += liters // Treat null as non-transfer
+    }
+  })
+  console.log('[FIFO DEBUG] Raw consumption data (unfiltered) - transfer breakdown:', Object.fromEntries(transferCounts))
+
+  // Now filter to exclude transfers
+  // CRITICAL: Check for both boolean true and string "true" (PostgreSQL can return booleans as strings)
+  const allConsumptions = (allConsumptionsUnfiltered || []).filter(cons => {
+    const isTransfer = cons.is_transfer === true || cons.is_transfer === 'true' || cons.is_transfer === 1
+    return !isTransfer
+  })
+  const consumptionsError = consumptionsUnfilteredError
 
   if (consumptionsError) {
     console.error('[FIFO] Error fetching consumptions:', consumptionsError)
   }
 
   const allConsumptionsFetched = allConsumptions || []
+  const isTransferFlag = (value: unknown): boolean => {
+    if (value === true || value === 1) return true
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase()
+      return normalized === 'true' || normalized === 't' || normalized === '1'
+    }
+    return false
+  }
   
   // Helper function to convert UTC timestamp to GMT-6 (local timezone) and extract date
   const getLocalDateStr = (utcTimestamp: string): string => {
@@ -146,6 +214,10 @@ async function calculateDieselCostsFIFO_IngresosGastos(
   // CRITICAL: Use transaction_date (NOT created_at) - transaction_date is when the consumption occurred
   // IMPORTANT: Convert UTC to GMT-6 before comparing dates
   const consumptionsInPeriod = allConsumptionsFetched.filter(cons => {
+    if (isTransferFlag(cons.is_transfer)) {
+      console.warn('[FIFO] Unexpected transfer row reached consumptionsInPeriod:', cons.id)
+      return false
+    }
     // Ensure we're using transaction_date, not created_at
     if (!cons.transaction_date) {
       console.warn('[FIFO] Warning: Consumption missing transaction_date:', cons.id)
@@ -154,6 +226,76 @@ async function calculateDieselCostsFIFO_IngresosGastos(
     const consDateStr = getLocalDateStr(cons.transaction_date) // Convert UTC to GMT-6 and extract date
     return consDateStr >= dateFromStr && consDateStr <= dateToStr
   })
+  
+  // Debug: Log consumptions by plant (in period)
+  const consumptionsByPlant = new Map<string, { count: number, liters: number, transfers: number }>()
+  allConsumptionsFetched.forEach(cons => {
+    const isTransfer = isTransferFlag(cons.is_transfer)
+    const plantCode = warehouseToPlantCode.get(cons.warehouse_id) || 'UNKNOWN'
+    if (!consumptionsByPlant.has(plantCode)) {
+      consumptionsByPlant.set(plantCode, { count: 0, liters: 0, transfers: 0 })
+    }
+    const stat = consumptionsByPlant.get(plantCode)!
+    if (isTransfer) {
+      stat.transfers++
+      return
+    }
+    stat.count++
+    stat.liters += Number(cons.quantity_liters || 0)
+  })
+  console.log('[FIFO] Consumptions by plant (total fetched):', Object.fromEntries(consumptionsByPlant))
+  
+  // Debug: Log in-period consumptions (also check for transfers that might be in period)
+  const consumptionsInPeriodByPlant = new Map<string, { count: number, liters: number }>()
+  
+  // Also check what's in period from the UNFILTERED data to see if transfers are in period
+  const inPeriodUnfiltered = (allConsumptionsUnfiltered || []).filter(cons => {
+    if (!cons.transaction_date) return false
+    const consDateStr = getLocalDateStr(cons.transaction_date)
+    return consDateStr >= dateFromStr && consDateStr <= dateToStr
+  })
+  
+  const inPeriodTransferCheck = new Map<string, { total: number, transfers: number, transferLiters: number, nonTransferLiters: number }>()
+  inPeriodUnfiltered.forEach(cons => {
+    const plantCode = warehouseToPlantCode.get(cons.warehouse_id) || 'UNKNOWN'
+    if (!inPeriodTransferCheck.has(plantCode)) {
+      inPeriodTransferCheck.set(plantCode, { total: 0, transfers: 0, transferLiters: 0, nonTransferLiters: 0 })
+    }
+    const stat = inPeriodTransferCheck.get(plantCode)!
+    stat.total++
+    const liters = Number(cons.quantity_liters || 0)
+    if (isTransferFlag(cons.is_transfer)) {
+      stat.transfers++
+      stat.transferLiters += liters
+    } else {
+      stat.nonTransferLiters += liters
+    }
+  })
+  console.log('[FIFO DEBUG] IN-PERIOD transfer check (from unfiltered):', Object.fromEntries(inPeriodTransferCheck))
+  
+  // CRITICAL DEBUG: Check if consumptionsInPeriod still contains transfers
+  const transfersInFilteredPeriod = consumptionsInPeriod.filter(c => isTransferFlag(c.is_transfer))
+  if (transfersInFilteredPeriod.length > 0) {
+    console.error('[FIFO ERROR] consumptionsInPeriod STILL CONTAINS TRANSFERS!', transfersInFilteredPeriod.map(c => ({
+      id: c.id,
+      date: c.transaction_date,
+      liters: c.quantity_liters,
+      is_transfer: c.is_transfer,
+      is_transfer_type: typeof c.is_transfer
+    })))
+  }
+  
+  consumptionsInPeriod.forEach(cons => {
+    if (isTransferFlag(cons.is_transfer)) return
+    const plantCode = warehouseToPlantCode.get(cons.warehouse_id) || 'UNKNOWN'
+    if (!consumptionsInPeriodByPlant.has(plantCode)) {
+      consumptionsInPeriodByPlant.set(plantCode, { count: 0, liters: 0 })
+    }
+    const stat = consumptionsInPeriodByPlant.get(plantCode)!
+    stat.count++
+    stat.liters += Number(cons.quantity_liters || 0)
+  })
+  console.log('[FIFO] Consumptions by plant (in period - filtered):', Object.fromEntries(consumptionsInPeriodByPlant))
 
 
   // STEP 3: Process entries and consumptions chronologically together for proper FIFO
@@ -194,9 +336,30 @@ async function calculateDieselCostsFIFO_IngresosGastos(
 
   // Add consumptions - use ALL fetched consumptions for processing (to maintain inventory state)
   // But we'll STRICTLY filter costs to only October consumptions later
+  // CRITICAL: Double-check to exclude transfers (defense in depth)
+  let skippedTransfersCount = 0
+  let skippedTransfersLiters = 0
+  let p004AddedToTransactions = 0
+  let p004AddedLiters = 0
   allConsumptionsFetched.forEach(consumption => {
+    // Defense in depth: skip transfers even if they passed the query filter
+    // Check for both boolean true and string "true" (PostgreSQL can return booleans as strings)
+    const isTransfer = consumption.is_transfer === true || consumption.is_transfer === 'true' || consumption.is_transfer === 1
+    if (isTransfer) {
+      skippedTransfersCount++
+      skippedTransfersLiters += Number(consumption.quantity_liters || 0)
+      console.warn(`[Ingresos-Gastos FIFO] Skipping transfer consumption: ${consumption.id} (is_transfer=${consumption.is_transfer}, liters=${consumption.quantity_liters})`)
+      return
+    }
+    
     const whId = consumption.warehouse_id
     if (!whId || !warehouseToPlantCode.has(whId)) return
+    
+    // Debug P004
+    if (p004WarehouseDebug && whId === p004WarehouseDebug) {
+      p004AddedToTransactions++
+      p004AddedLiters += Number(consumption.quantity_liters || 0)
+    }
     
     if (!transactionsByWarehouse.has(whId)) {
       transactionsByWarehouse.set(whId, [])
@@ -209,6 +372,19 @@ async function calculateDieselCostsFIFO_IngresosGastos(
       productId: consumption.product_id
     })
   })
+  
+  // Debug P004 transactions added
+  if (p004WarehouseDebug) {
+    const p004Transactions = transactionsByWarehouse.get(p004WarehouseDebug) || []
+    const p004Consumptions = p004Transactions.filter(t => t.type === 'consumption')
+    console.log(`[CRITICAL DEBUG] P004 transactions added to FIFO:`, {
+      totalTransactions: p004Transactions.length,
+      consumptions: p004Consumptions.length,
+      consumptionLiters: p004Consumptions.reduce((sum, t) => sum + t.liters, 0),
+      addedCount: p004AddedToTransactions,
+      addedLiters: p004AddedLiters
+    })
+  }
 
   // Calculate weighted average price per warehouse for fallback (from all entries)
   const warehouseWeightedAvg = new Map<string, number>()
@@ -308,14 +484,29 @@ async function calculateDieselCostsFIFO_IngresosGastos(
             const fallbackCost = remainingLiters * weightedAvgPrice
             consumptionCost += fallbackCost
           } else {
-            // Last resort: product default price
+            // Second fallback: product default price
             const fallbackPrice = tx.productId ? (priceByProduct.get(tx.productId) || 0) : 0
             if (fallbackPrice > 0) {
               const fallbackCost = remainingLiters * fallbackPrice
               consumptionCost += fallbackCost
-            } else if (remainingLiters > 0.01) {
-              // No price available at all - log error for troubleshooting
-              console.error(`[FIFO] ${plantCode}: ${remainingLiters.toFixed(2)}L could not be priced - no FIFO lots, no weighted avg, no product price`)
+            } else {
+              // Third fallback: Use global average from ALL priceByProduct entries
+              let globalAvgPrice = 0
+              if (priceByProduct.size > 0) {
+                const prices = Array.from(priceByProduct.values()).filter(p => p > 0)
+                if (prices.length > 0) {
+                  globalAvgPrice = prices.reduce((a, b) => a + b, 0) / prices.length
+                }
+              }
+              
+              if (globalAvgPrice > 0) {
+                const fallbackCost = remainingLiters * globalAvgPrice
+                consumptionCost += fallbackCost
+                console.warn(`[FIFO] ${plantCode}: ${remainingLiters.toFixed(2)}L priced with global avg $${globalAvgPrice.toFixed(2)}/L`)
+              } else if (remainingLiters > 0.01) {
+                // No price available at all - log error for troubleshooting
+                console.error(`[FIFO] ${plantCode}: ${remainingLiters.toFixed(2)}L could not be priced - no FIFO lots, no weighted avg, no product price`)
+              }
             }
           }
         }
@@ -329,7 +520,17 @@ async function calculateDieselCostsFIFO_IngresosGastos(
     })
 
     consumptionCosts.set(warehouseId, totalConsumptionCost)
+    
+    // Debug P004 costs
+    if (plantCode === 'P004') {
+      console.log(`[FIFO DEBUG P004] Total consumption cost calculated: $${totalConsumptionCost.toFixed(2)}`)
+    }
   })
+  
+  // Debug: Log skipped transfers summary
+  if (skippedTransfersCount > 0) {
+    console.log(`[FIFO] Skipped ${skippedTransfersCount} transfer consumptions totaling ${skippedTransfersLiters.toFixed(2)}L from FIFO processing`)
+  }
 
   // Aggregate costs by plant code
   consumptionCosts.forEach((cost, warehouseId) => {
@@ -352,13 +553,26 @@ export async function POST(req: NextRequest) {
   try {
     const { month, businessUnitId, plantId } = (await req.json()) as Body
 
-    // Convert month to date range (full month)
-    const [year, monthNum] = month.split('-').map(Number)
-    const dateFrom = new Date(year, monthNum - 1, 1)
-    const dateTo = new Date(year, monthNum, 0) // Last day of month
-    const dateFromStr = dateFrom.toISOString().slice(0, 10)
-    const dateToStr = dateTo.toISOString().slice(0, 10)
-    // minimal
+    // Helper to build YYYY-MM date ranges (inclusive) for a month string
+    const getMonthRange = (monthStr: string) => {
+      const [yr, mNum] = monthStr.split('-').map(Number)
+      const from = new Date(yr, mNum - 1, 1)
+      const to = new Date(yr, mNum, 0)
+      return {
+        year: yr,
+        monthNum: mNum,
+        dateFromStr: from.toISOString().slice(0, 10),
+        dateToStr: to.toISOString().slice(0, 10),
+        periodMonth: `${yr}-${String(mNum).padStart(2, '0')}-01`
+      }
+    }
+
+    // Current and previous month ranges
+    const currentRange = getMonthRange(month)
+    const prevDate = new Date(currentRange.dateFromStr)
+    prevDate.setMonth(prevDate.getMonth() - 1)
+    const prevMonthStr = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`
+    const previousRange = getMonthRange(prevMonthStr)
 
     const supabase = await createServerSupabase()
 
@@ -390,332 +604,220 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // Fetch vw_plant_financial_analysis_unified for the month from COTIZADOR project
-    const periodMonth = `${year}-${String(monthNum).padStart(2, '0')}-01`
-
+    // Shared cotizador client across periods
     const cotizadorSupabase = createClient(
       process.env.COTIZADOR_SUPABASE_URL!,
       process.env.COTIZADOR_SUPABASE_SERVICE_ROLE_KEY!,
       { auth: { persistSession: false } }
     )
 
-    let viewData: any[] | null = null
-    try {
-      const { data: viewRows, error: viewError } = await cotizadorSupabase
-        .from('vw_plant_financial_analysis_unified')
-        .select('*')
-        .eq('period_start', periodMonth)
+    // Internal helper to build a month snapshot (reuses shared clients and filters)
+    const buildMonthSnapshot = async (range: ReturnType<typeof getMonthRange>) => {
+      const { dateFromStr, dateToStr, periodMonth } = range
 
-      if (viewError) {
-        console.error('View fetch error (cotizador):', viewError)
-      }
-      viewData = viewRows || []
-    } catch (err) {
-      console.error('Error querying vw_plant_financial_analysis_unified from cotizador:', err)
-      viewData = []
-    }
-
-    // Build view data map by plant code (the view uses plant codes)
-    const viewDataByPlantCode = new Map<string, any>()
-    ;(viewData || []).forEach(row => {
-      if (row.plant_code) {
-        viewDataByPlantCode.set(row.plant_code, row)
-      }
-    })
-
-    // Fetch bombeo data from vw_pumping_analysis_unified for the month
-    // The view has daily data (period_start = period_end for each day)
-    // We need to filter by date range and aggregate by plant_code
-    const plantCodes = targetPlants.map(p => p.code).filter(Boolean)
-    let pumpingData: any[] | null = null
-    
-    if (plantCodes.length > 0) {
+      // Fetch vw_plant_financial_analysis_unified for the month from COTIZADOR project
+      let viewData: any[] | null = null
       try {
-        // Filter by date range (all days in the month) and selected plant codes
-        const { data: pumpingRows, error: pumpingError } = await cotizadorSupabase
-          .from('vw_pumping_analysis_unified')
-          .select('plant_code, volumen_bombeo_m3, subtotal_total')
-          .gte('period_start', dateFromStr)
-          .lte('period_start', dateToStr)
-          .in('plant_code', plantCodes)
+        const { data: viewRows, error: viewError } = await cotizadorSupabase
+          .from('vw_plant_financial_analysis_unified')
+          .select('*')
+          .eq('period_start', periodMonth)
 
-        if (pumpingError) {
-          console.error('Pumping view fetch error (cotizador):', pumpingError)
+        if (viewError) {
+          console.error('View fetch error (cotizador):', viewError)
         }
-        pumpingData = pumpingRows || []
+        viewData = viewRows || []
       } catch (err) {
-        console.error('Error querying vw_pumping_analysis_unified from cotizador:', err)
+        console.error('Error querying vw_plant_financial_analysis_unified from cotizador:', err)
+        viewData = []
+      }
+
+      // Build view data map by plant code (the view uses plant codes)
+      const viewDataByPlantCode = new Map<string, any>()
+      ;(viewData || []).forEach(row => {
+        if (row.plant_code) {
+          viewDataByPlantCode.set(row.plant_code, row)
+        }
+      })
+
+      // Fetch bombeo data from vw_pumping_analysis_unified for the month
+      // Note: This view is now a materialized view (mv_pumping_analysis_unified) for performance.
+      // It refreshes automatically every hour at :30 past the hour, so data may be up to 1 hour old.
+      // For real-time data, call refresh_analytics_materialized_views() RPC or use the
+      // /refresh-materialized-views endpoint. The view name remains the same (aliased).
+      const plantCodes = targetPlants.map(p => p.code).filter(Boolean)
+      let pumpingData: any[] | null = null
+      
+      if (plantCodes.length > 0) {
+        try {
+          const { data: pumpingRows, error: pumpingError } = await cotizadorSupabase
+            .from('vw_pumping_analysis_unified')
+            .select('plant_code, volumen_bombeo_m3, subtotal_total')
+            .gte('period_start', dateFromStr)
+            .lte('period_start', dateToStr)
+            .in('plant_code', plantCodes)
+
+          if (pumpingError) {
+            console.error('Pumping view fetch error (cotizador):', pumpingError)
+          }
+          pumpingData = pumpingRows || []
+        } catch (err) {
+          console.error('Error querying vw_pumping_analysis_unified from cotizador:', err)
+          pumpingData = []
+        }
+      } else {
         pumpingData = []
       }
-    } else {
-      pumpingData = []
-    }
 
-    // Aggregate pumping data by plant_code (sum volumes and revenues for monthly totals)
-    // This handles daily data correctly by summing all days in the month
-    const pumpingDataByPlantCode = new Map<string, { volumen_bombeo_m3: number, subtotal_total: number }>()
-    ;(pumpingData || []).forEach(row => {
-      if (row.plant_code && plantCodes.includes(row.plant_code)) {
-        const existing = pumpingDataByPlantCode.get(row.plant_code) || { volumen_bombeo_m3: 0, subtotal_total: 0 }
-        pumpingDataByPlantCode.set(row.plant_code, {
-          volumen_bombeo_m3: existing.volumen_bombeo_m3 + Number(row.volumen_bombeo_m3 || 0),
-          subtotal_total: existing.subtotal_total + Number(row.subtotal_total || 0)
-        })
-      }
-    })
-
-    // Fetch diesel and maintenance costs using existing gerencial logic
-    // We'll call the gerencial API internally and extract plant-level data
-    const host = req.headers.get('host') || ''
-    const envBaseUrl = process.env.NEXT_PUBLIC_BASE_URL
-    
-    // For internal server-to-server calls, always use the actual request host/port
-    // This prevents port mismatches (e.g., server on 3001 but env says 3000)
-    let base: string
-    if (host.includes('localhost') || host.includes('127.0.0.1')) {
-      // Extract port from host (e.g., "localhost:3001" -> "3001")
-      const port = host.split(':')[1] || '3000'
-      // Use 127.0.0.1 for more reliable server-to-server calls in local development
-      base = `http://127.0.0.1:${port}`
-    } else {
-      // Production: use host from request
-      base = `https://${host}`
-    }
-    
-    // Warn if env base URL doesn't match actual host (common in local dev)
-    if (envBaseUrl && envBaseUrl !== base) {
-      console.warn('[Ingresos Gastos Report] Base URL mismatch detected:', {
-        envBaseUrl,
-        actualBaseUrl: base,
-        host,
-        note: 'Using actual host for internal API calls'
-      })
-    }
-    
-    const gerencialApiUrl = `${base}/api/reports/gerencial`
-    const gerencialRequestPayload = {
-      dateFrom: dateFromStr,
-      dateTo: dateToStr,
-      businessUnitId,
-      plantId,
-      hideZeroActivity: false
-    }
-    
-    console.log('[Ingresos Gastos Report] Fetching gerencial data:', {
-      url: gerencialApiUrl,
-      payload: gerencialRequestPayload
-    })
-    
-    let gerencialData: any = null
-    try {
-      const gerencialResp = await fetch(gerencialApiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(gerencialRequestPayload)
-      })
-      
-      if (!gerencialResp.ok) {
-        const errorText = await gerencialResp.text()
-        let errorJson: any = null
-        try {
-          errorJson = JSON.parse(errorText)
-        } catch {
-          // Not JSON, use text as-is
+      const pumpingDataByPlantCode = new Map<string, { volumen_bombeo_m3: number, subtotal_total: number }>()
+      ;(pumpingData || []).forEach(row => {
+        if (row.plant_code && plantCodes.includes(row.plant_code)) {
+          const existing = pumpingDataByPlantCode.get(row.plant_code) || { volumen_bombeo_m3: 0, subtotal_total: 0 }
+          pumpingDataByPlantCode.set(row.plant_code, {
+            volumen_bombeo_m3: existing.volumen_bombeo_m3 + Number(row.volumen_bombeo_m3 || 0),
+            subtotal_total: existing.subtotal_total + Number(row.subtotal_total || 0)
+          })
         }
-        
-        console.error('[Ingresos Gastos Report] Gerencial API fetch failed:', {
-          status: gerencialResp.status,
-          statusText: gerencialResp.statusText,
-          url: gerencialApiUrl,
-          errorBody: errorJson || errorText
-        })
-        
-        gerencialData = null
+      })
+
+      // Fetch diesel and maintenance costs using existing gerencial logic
+      const host = req.headers.get('host') || ''
+      const envBaseUrl = process.env.NEXT_PUBLIC_BASE_URL
+      let base: string
+      if (host.includes('localhost') || host.includes('127.0.0.1')) {
+        const port = host.split(':')[1] || '3000'
+        base = `http://127.0.0.1:${port}`
       } else {
-        try {
-          gerencialData = await gerencialResp.json()
-          console.log('[Ingresos Gastos Report] Gerencial data fetched successfully:', {
-            hasData: !!gerencialData,
-            businessUnitsCount: gerencialData?.businessUnits?.length || 0,
-            plantsCount: gerencialData?.plants?.length || 0
-          })
-        } catch (parseError: any) {
-          console.error('[Ingresos Gastos Report] Failed to parse gerencial API response:', {
-            error: parseError?.message,
-            status: gerencialResp.status,
-            url: gerencialApiUrl
-          })
-          gerencialData = null
-        }
+        base = `https://${host}`
       }
-    } catch (fetchError: any) {
-      console.error('[Ingresos Gastos Report] Gerencial API fetch exception:', {
-        error: fetchError?.message,
-        stack: fetchError?.stack,
-        url: gerencialApiUrl,
-        baseUrl: base,
-        host: host
-      })
-      gerencialData = null
-    }
-
-    // Calculate diesel costs using FIFO (primary method)
-    // Get product prices for fallback when entries lack prices
-    const { data: products } = await supabase
-      .from('diesel_products')
-      .select('id, price_per_liter')
-    const priceByProduct = new Map<string, number>()
-    ;(products || []).forEach(p => priceByProduct.set(p.id, Number(p.price_per_liter || 0)))
-
-    // Calculate FIFO diesel costs for all target plants
-    // Reuse plantCodes already defined above for bombeo query
-    const fifoDieselCosts = await calculateDieselCostsFIFO_IngresosGastos(
-      supabase,
-      dateFromStr,
-      dateToStr,
-      plantCodes,
-      priceByProduct
-    )
-    // console.log('[Ingresos-Gastos] FIFO results:', Object.fromEntries(fifoDieselCosts))
-
-    // Map gerencial plant data by plant CODE for maintenance costs (diesel comes from FIFO)
-    const gerencialPlantMapByCode = new Map<string, any>()
-    ;(gerencialData?.plants || []).forEach((plant: any) => {
-      // Find plant code from plants list to match with view
-      const matchingPlant = (plants || []).find(p => p.id === plant.id)
-      if (matchingPlant?.code) {
-        gerencialPlantMapByCode.set(matchingPlant.code, {
-          maintenance_cost: plant.maintenance_cost || 0
+      
+      if (envBaseUrl && envBaseUrl !== base) {
+        console.warn('[Ingresos Gastos Report] Base URL mismatch detected:', {
+          envBaseUrl,
+          actualBaseUrl: base,
+          host,
+          note: 'Using actual host for internal API calls'
         })
       }
-    })
-
-    // Aggregate maintenance costs by plant CODE from assets (if plant summary missing)
-    const maintenanceByCode = new Map<string, number>()
-    ;(gerencialData?.assets || []).forEach((asset: any) => {
-      const pcode = asset.plant_code
-      if (!pcode) return
       
-      const mantto = Number(asset.maintenance_cost || 0)
-      if (!maintenanceByCode.has(pcode)) {
-        maintenanceByCode.set(pcode, 0)
-      }
-      maintenanceByCode.set(pcode, maintenanceByCode.get(pcode)! + mantto)
-    })
-
-    // Combine FIFO diesel + maintenance costs by plant code
-    const dieselManttoByCode = new Map<string, { diesel_cost: number, maintenance_cost: number }>()
-    
-    // Add FIFO diesel costs
-    fifoDieselCosts.forEach((dieselCost, plantCode) => {
-      if (!dieselManttoByCode.has(plantCode)) {
-        dieselManttoByCode.set(plantCode, { diesel_cost: 0, maintenance_cost: 0 })
-      }
-      dieselManttoByCode.get(plantCode)!.diesel_cost = dieselCost
-      // minimal
-    })
-    
-    // Initialize all plants from view data with zero costs if not already set
-    viewDataByPlantCode.forEach((viewRow, plantCode) => {
-      if (!dieselManttoByCode.has(plantCode)) {
-        dieselManttoByCode.set(plantCode, { diesel_cost: 0, maintenance_cost: 0 })
-      }
-    })
-
-    // Add maintenance costs (from gerencial plant summary or asset aggregation)
-    gerencialPlantMapByCode.forEach((plant, plantCode) => {
-      if (!dieselManttoByCode.has(plantCode)) {
-        dieselManttoByCode.set(plantCode, { diesel_cost: 0, maintenance_cost: 0 })
-      }
-      dieselManttoByCode.get(plantCode)!.maintenance_cost = plant.maintenance_cost || 0
-    })
-
-    maintenanceByCode.forEach((manttoCost, plantCode) => {
-      if (!dieselManttoByCode.has(plantCode)) {
-        dieselManttoByCode.set(plantCode, { diesel_cost: 0, maintenance_cost: 0 })
-      }
-      // Only use if not already set from plant summary
-      if (dieselManttoByCode.get(plantCode)!.maintenance_cost === 0) {
-        dieselManttoByCode.get(plantCode)!.maintenance_cost = manttoCost
-      }
-    })
-
-    // Deep fallback for maintenance: If gerencialData doesn't have maintenance, query directly
-    // Diesel is already calculated via FIFO above, so we only need maintenance here
-    const missingMaintenancePlants = plantCodes.filter(code => 
-      !dieselManttoByCode.has(code) || dieselManttoByCode.get(code)!.maintenance_cost === 0
-    )
-    
-    if (missingMaintenancePlants.length > 0 && gerencialData == null) {
-      // Build assets list with plant mapping
-      const { data: assetsDirect } = await supabase
-        .from('assets')
-        .select('id, plant_id, plants(code)')
-      const assetIds: string[] = (assetsDirect || []).map(a => a.id)
-
-      // Purchase orders + work orders for maintenance
-      const { data: purchaseOrders } = await supabase
-        .from('purchase_orders')
-        .select('id, total_amount, actual_amount, created_at, posting_date, purchase_date, work_order_id, status')
-        .neq('status', 'pending_approval')
-      const workOrderIds = (purchaseOrders || []).map(po => po.work_order_id).filter(Boolean)
-      const { data: workOrders } = workOrderIds.length > 0 ? await supabase
-        .from('work_orders')
-        .select('id, asset_id, completed_at, planned_date, created_at, assets(plant_id, plants(code))')
-        .in('id', workOrderIds) : { data: [] as any[] }
-      const woById = new Map<string, any>((workOrders || []).map(w => [w.id, w]))
-
-      // Aggregate maintenance by plant code
-      const plantManttoFallback = new Map<string, number>()
-      
-      // Extract date-only string (YYYY-MM-DD) from timestamptz, ignoring time/timezone
-      const extractDateOnly = (dateStr: string): string => {
-        if (!dateStr) return ''
-        // Handle ISO timestamptz: "2025-10-01T00:00:00+00" -> "2025-10-01"
-        if (dateStr.includes('T')) {
-          return dateStr.split('T')[0]
-        }
-        // Handle date-only string: "2025-10-01" -> "2025-10-01"
-        return dateStr.slice(0, 10)
+      const gerencialApiUrl = `${base}/api/reports/gerencial`
+      const gerencialRequestPayload = {
+        dateFrom: dateFromStr,
+        dateTo: dateToStr,
+        businessUnitId,
+        plantId,
+        hideZeroActivity: false
       }
       
-      ;(purchaseOrders || []).forEach(po => {
-        let dateToCheckStr: string
+      let gerencialData: any = null
+      try {
+        const gerencialResp = await fetch(gerencialApiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(gerencialRequestPayload)
+        })
         
-        // Priority: purchase_date → work_order.completed_at → work_order.planned_date → work_order.created_at
-        if (po.purchase_date) {
-          dateToCheckStr = po.purchase_date
-        } else if (po.work_order_id) {
-          const wo = woById.get(po.work_order_id)
-          if (wo?.completed_at) {
-            dateToCheckStr = wo.completed_at
-          } else if (wo?.planned_date) {
-            dateToCheckStr = wo.planned_date
-          } else if (wo?.created_at) {
-            dateToCheckStr = wo.created_at
-          } else {
-            dateToCheckStr = po.created_at
+        if (!gerencialResp.ok) {
+          const errorText = await gerencialResp.text()
+          let errorJson: any = null
+          try {
+            errorJson = JSON.parse(errorText)
+          } catch {
+            // Not JSON, use text as-is
           }
+          
+          console.error('[Ingresos Gastos Report] Gerencial API fetch failed:', {
+            status: gerencialResp.status,
+            statusText: gerencialResp.statusText,
+            url: gerencialApiUrl,
+            errorBody: errorJson || errorText
+          })
+          
+          gerencialData = null
         } else {
-          dateToCheckStr = po.created_at
+          try {
+            gerencialData = await gerencialResp.json()
+          } catch (parseError: any) {
+            console.error('[Ingresos Gastos Report] Failed to parse gerencial API response:', {
+              error: parseError?.message,
+              status: gerencialResp.status,
+              url: gerencialApiUrl
+            })
+            gerencialData = null
+          }
         }
-        
-        // Compare by DATE ONLY (YYYY-MM-DD) to avoid timezone issues
-        const checkDateOnly = extractDateOnly(dateToCheckStr)
-        if (checkDateOnly < dateFromStr || checkDateOnly > dateToStr) return
-        const finalAmount = po.actual_amount ? parseFloat(po.actual_amount) : parseFloat(po.total_amount || '0')
-        const wo = po.work_order_id ? woById.get(po.work_order_id) : null
-        const plantCode = (wo as any)?.assets?.plants?.code
-        if (!plantCode || !missingMaintenancePlants.includes(plantCode)) return
-        
-        if (!plantManttoFallback.has(plantCode)) {
-          plantManttoFallback.set(plantCode, 0)
+      } catch (fetchError: any) {
+        console.error('[Ingresos Gastos Report] Gerencial API fetch exception:', {
+          error: fetchError?.message,
+          stack: fetchError?.stack,
+          url: gerencialApiUrl,
+          baseUrl: base,
+          host: host
+        })
+        gerencialData = null
+      }
+
+      // Calculate diesel costs using FIFO (primary method)
+      const { data: products } = await supabase
+        .from('diesel_products')
+        .select('id, price_per_liter')
+      const priceByProduct = new Map<string, number>()
+      ;(products || []).forEach(p => priceByProduct.set(p.id, Number(p.price_per_liter || 0)))
+
+      const plantCodesForRange = targetPlants.map(p => p.code).filter(Boolean)
+      const fifoDieselCosts = await calculateDieselCostsFIFO_IngresosGastos(
+        supabase,
+        dateFromStr,
+        dateToStr,
+        plantCodesForRange,
+        priceByProduct
+      )
+
+      const gerencialPlantMapByCode = new Map<string, any>()
+      ;(gerencialData?.plants || []).forEach((plant: any) => {
+        const matchingPlant = (plants || []).find(p => p.id === plant.id)
+        if (matchingPlant?.code) {
+          gerencialPlantMapByCode.set(matchingPlant.code, {
+            maintenance_cost: plant.maintenance_cost || 0
+          })
         }
-        plantManttoFallback.set(plantCode, plantManttoFallback.get(plantCode)! + finalAmount)
       })
 
-      // Merge maintenance fallback
-      plantManttoFallback.forEach((manttoCost, plantCode) => {
+      const maintenanceByCode = new Map<string, number>()
+      ;(gerencialData?.assets || []).forEach((asset: any) => {
+        const pcode = asset.plant_code
+        if (!pcode) return
+        
+        const mantto = Number(asset.maintenance_cost || 0)
+        if (!maintenanceByCode.has(pcode)) {
+          maintenanceByCode.set(pcode, 0)
+        }
+        maintenanceByCode.set(pcode, maintenanceByCode.get(pcode)! + mantto)
+      })
+
+      const dieselManttoByCode = new Map<string, { diesel_cost: number, maintenance_cost: number }>()
+      
+      fifoDieselCosts.forEach((dieselCost, plantCode) => {
+        if (!dieselManttoByCode.has(plantCode)) {
+          dieselManttoByCode.set(plantCode, { diesel_cost: 0, maintenance_cost: 0 })
+        }
+        dieselManttoByCode.get(plantCode)!.diesel_cost = dieselCost
+      })
+      
+      viewDataByPlantCode.forEach((_viewRow, plantCode) => {
+        if (!dieselManttoByCode.has(plantCode)) {
+          dieselManttoByCode.set(plantCode, { diesel_cost: 0, maintenance_cost: 0 })
+        }
+      })
+
+      gerencialPlantMapByCode.forEach((plant, plantCode) => {
+        if (!dieselManttoByCode.has(plantCode)) {
+          dieselManttoByCode.set(plantCode, { diesel_cost: 0, maintenance_cost: 0 })
+        }
+        dieselManttoByCode.get(plantCode)!.maintenance_cost = plant.maintenance_cost || 0
+      })
+
+      maintenanceByCode.forEach((manttoCost, plantCode) => {
         if (!dieselManttoByCode.has(plantCode)) {
           dieselManttoByCode.set(plantCode, { diesel_cost: 0, maintenance_cost: 0 })
         }
@@ -723,299 +825,373 @@ export async function POST(req: NextRequest) {
           dieselManttoByCode.get(plantCode)!.maintenance_cost = manttoCost
         }
       })
-    }
 
-    // Fetch manual financial adjustments for the period
-    // Include both direct assignments and distributed entries
-    const { data: manualAdjustments } = await supabase
-      .from('manual_financial_adjustments')
-      .select(`
-        *,
-        distributions:manual_financial_adjustment_distributions(
-          id,
-          plant_id,
-          business_unit_id,
-          department,
-          amount
-        )
-      `)
-      .eq('period_month', periodMonth)
+      const missingMaintenancePlants = plantCodesForRange.filter(code => 
+        !dieselManttoByCode.has(code) || dieselManttoByCode.get(code)!.maintenance_cost === 0
+      )
+      
+      if (missingMaintenancePlants.length > 0 && gerencialData == null) {
+        const { data: assetsDirect } = await supabase
+          .from('assets')
+          .select('id, plant_id, plants(code)')
 
-    // Aggregate manual adjustments by plant CODE (to match with view and gerencial data)
-    const manualByPlantCode = new Map<string, { nomina: number, otros_indirectos: number }>()
-    const targetPlantIds = targetPlants.map(p => p.id)
-    const targetPlantCodes = targetPlants.map(p => p.code).filter(Boolean) as string[]
-    
-    // Build plant code to BU mapping
-    const plantCodeToBU = new Map<string, string>()
-    ;(plants || []).forEach(p => {
-      if (p.code && p.business_unit_id) {
-        plantCodeToBU.set(p.code, p.business_unit_id)
-      }
-    })
+        const { data: purchaseOrders } = await supabase
+          .from('purchase_orders')
+          .select('id, total_amount, actual_amount, created_at, posting_date, purchase_date, work_order_id, status')
+          .neq('status', 'pending_approval')
+        const workOrderIds = (purchaseOrders || []).map(po => po.work_order_id).filter(Boolean)
+        const { data: workOrders } = workOrderIds.length > 0 ? await supabase
+          .from('work_orders')
+          .select('id, asset_id, completed_at, planned_date, created_at, assets(plant_id, plants(code))')
+          .in('id', workOrderIds) : { data: [] as any[] }
+        const woById = new Map<string, any>((workOrders || []).map(w => [w.id, w]))
 
-    // Build department to plant mapping from profiles
-    const { data: profilesData } = await supabase
-      .from('profiles')
-      .select('departamento, plant_id')
-      .not('departamento', 'is', null)
-      .not('plant_id', 'is', null)
-    
-    const departmentToPlants = new Map<string, string[]>()
-    ;(profilesData || []).forEach(profile => {
-      if (profile.departamento && profile.plant_id) {
-        if (!departmentToPlants.has(profile.departamento)) {
-          departmentToPlants.set(profile.departamento, [])
-        }
-        if (!departmentToPlants.get(profile.departamento)!.includes(profile.plant_id)) {
-          departmentToPlants.get(profile.departamento)!.push(profile.plant_id)
-        }
-      }
-    })
-
-    ;(manualAdjustments || []).forEach(adj => {
-      const category = adj.category
-      const amount = Number(adj.amount || 0)
-
-      // Handle direct plant assignments
-      if (adj.plant_id && targetPlantIds.includes(adj.plant_id)) {
-        const matchingPlant = (plants || []).find(p => p.id === adj.plant_id)
-        if (matchingPlant?.code) {
-          if (!manualByPlantCode.has(matchingPlant.code)) {
-            manualByPlantCode.set(matchingPlant.code, { nomina: 0, otros_indirectos: 0 })
+        const plantManttoFallback = new Map<string, number>()
+        
+        const extractDateOnly = (dateStr: string): string => {
+          if (!dateStr) return ''
+          if (dateStr.includes('T')) {
+            return dateStr.split('T')[0]
           }
-          const entry = manualByPlantCode.get(matchingPlant.code)!
-          if (category === 'nomina') {
-            entry.nomina += amount
-          } else if (category === 'otros_indirectos') {
-            entry.otros_indirectos += amount
-          }
+          return dateStr.slice(0, 10)
         }
-      }
-
-      // Handle distributed entries
-      if (adj.is_distributed && adj.distributions && Array.isArray(adj.distributions)) {
-        adj.distributions.forEach((dist: any) => {
-          const distAmount = Number(dist.amount || 0)
+        
+        ;(purchaseOrders || []).forEach(po => {
+          let dateToCheckStr: string
           
-          // Direct plant distribution
-          if (dist.plant_id && targetPlantIds.includes(dist.plant_id)) {
-            const matchingPlant = (plants || []).find(p => p.id === dist.plant_id)
-            if (matchingPlant?.code) {
-              if (!manualByPlantCode.has(matchingPlant.code)) {
-                manualByPlantCode.set(matchingPlant.code, { nomina: 0, otros_indirectos: 0 })
-              }
-              const entry = manualByPlantCode.get(matchingPlant.code)!
-              if (category === 'nomina') {
-                entry.nomina += distAmount
-              } else if (category === 'otros_indirectos') {
-                entry.otros_indirectos += distAmount
-              }
+          if (po.purchase_date) {
+            dateToCheckStr = po.purchase_date
+          } else if (po.work_order_id) {
+            const wo = woById.get(po.work_order_id)
+            if (wo?.completed_at) {
+              dateToCheckStr = wo.completed_at
+            } else if (wo?.planned_date) {
+              dateToCheckStr = wo.planned_date
+            } else if (wo?.created_at) {
+              dateToCheckStr = wo.created_at
+            } else {
+              dateToCheckStr = po.created_at
             }
+          } else {
+            dateToCheckStr = po.created_at
           }
           
-          // Business unit distribution - distribute to all plants in the BU
-          if (dist.business_unit_id) {
-            const buPlants = (plants || []).filter(p => 
-              p.business_unit_id === dist.business_unit_id && targetPlantIds.includes(p.id)
-            )
-            if (buPlants.length > 0) {
-              // Distribute equally among plants in the BU
-              const amountPerPlant = distAmount / buPlants.length
-              buPlants.forEach(plant => {
-                if (plant.code) {
-                  if (!manualByPlantCode.has(plant.code)) {
-                    manualByPlantCode.set(plant.code, { nomina: 0, otros_indirectos: 0 })
-                  }
-                  const entry = manualByPlantCode.get(plant.code)!
-                  if (category === 'nomina') {
-                    entry.nomina += amountPerPlant
-                  } else if (category === 'otros_indirectos') {
-                    entry.otros_indirectos += amountPerPlant
-                  }
-                }
-              })
-            }
-          }
+          const checkDateOnly = extractDateOnly(dateToCheckStr)
+          if (checkDateOnly < dateFromStr || checkDateOnly > dateToStr) return
+          const finalAmount = po.actual_amount ? parseFloat(po.actual_amount) : parseFloat(po.total_amount || '0')
+          const wo = po.work_order_id ? woById.get(po.work_order_id) : null
+          const plantCode = (wo as any)?.assets?.plants?.code
+          if (!plantCode || !missingMaintenancePlants.includes(plantCode)) return
           
-          // Department distribution - distribute to plants where that department exists
-          if (dist.department) {
-            const departmentPlants = departmentToPlants.get(dist.department) || []
-            const targetDepartmentPlants = departmentPlants.filter(pid => targetPlantIds.includes(pid))
-            if (targetDepartmentPlants.length > 0) {
-              // Distribute equally among plants with that department
-              const amountPerPlant = distAmount / targetDepartmentPlants.length
-              targetDepartmentPlants.forEach(plantId => {
-                const matchingPlant = (plants || []).find(p => p.id === plantId)
-                if (matchingPlant?.code) {
-                  if (!manualByPlantCode.has(matchingPlant.code)) {
-                    manualByPlantCode.set(matchingPlant.code, { nomina: 0, otros_indirectos: 0 })
-                  }
-                  const entry = manualByPlantCode.get(matchingPlant.code)!
-                  if (category === 'nomina') {
-                    entry.nomina += amountPerPlant
-                  } else if (category === 'otros_indirectos') {
-                    entry.otros_indirectos += amountPerPlant
-                  }
-                }
-              })
-            }
+          if (!plantManttoFallback.has(plantCode)) {
+            plantManttoFallback.set(plantCode, 0)
+          }
+          plantManttoFallback.set(plantCode, plantManttoFallback.get(plantCode)! + finalAmount)
+        })
+
+        plantManttoFallback.forEach((manttoCost, plantCode) => {
+          if (!dieselManttoByCode.has(plantCode)) {
+            dieselManttoByCode.set(plantCode, { diesel_cost: 0, maintenance_cost: 0 })
+          }
+          if (dieselManttoByCode.get(plantCode)!.maintenance_cost === 0) {
+            dieselManttoByCode.get(plantCode)!.maintenance_cost = manttoCost
           }
         })
       }
-    })
 
-    // Log summary of diesel costs before building response
-    // minimal summary only when needed
+      const { data: manualAdjustments } = await supabase
+        .from('manual_financial_adjustments')
+        .select(`
+          *,
+          distributions:manual_financial_adjustment_distributions(
+            id,
+            plant_id,
+            business_unit_id,
+            department,
+            amount
+          )
+        `)
+        .eq('period_month', periodMonth)
 
-    // Build unified plant data - match everything by plant CODE since view uses codes
-    const plantData = targetPlants.map(plant => {
-      const viewRow = viewDataByPlantCode.get(plant.code)
+      const manualByPlantCode = new Map<string, { nomina: number, otros_indirectos: number }>()
+      const targetPlantIds = targetPlants.map(p => p.id)
+      const targetPlantCodes = targetPlants.map(p => p.code).filter(Boolean) as string[]
       
-      // Get diesel/maintenance from gerencial data - prefer plant summary, fallback to asset aggregation
-      let gerencialPlant = gerencialPlantMapByCode.get(plant.code)
-      if (!gerencialPlant && dieselManttoByCode.has(plant.code)) {
-        const agg = dieselManttoByCode.get(plant.code)!
-        gerencialPlant = { diesel_cost: agg.diesel_cost, maintenance_cost: agg.maintenance_cost }
-      }
+      const plantCodeToBU = new Map<string, string>()
+      ;(plants || []).forEach(p => {
+        if (p.code && p.business_unit_id) {
+          plantCodeToBU.set(p.code, p.business_unit_id)
+        }
+      })
+
+      const { data: profilesData } = await supabase
+        .from('profiles')
+        .select('departamento, plant_id')
+        .not('departamento', 'is', null)
+        .not('plant_id', 'is', null)
       
-      const manual = manualByPlantCode.get(plant.code) || { nomina: 0, otros_indirectos: 0 }
+      const departmentToPlants = new Map<string, string[]>()
+      ;(profilesData || []).forEach(profile => {
+        if (profile.departamento && profile.plant_id) {
+          if (!departmentToPlants.has(profile.departamento)) {
+            departmentToPlants.set(profile.departamento, [])
+          }
+          if (!departmentToPlants.get(profile.departamento)!.includes(profile.plant_id)) {
+            departmentToPlants.get(profile.departamento)!.push(profile.plant_id)
+          }
+        }
+      })
 
-      // From view: Ingresos and MP data
-      const volumen_concreto = Number(viewRow?.volumen_concreto_m3 || 0)
-      const fc_ponderada = Number(viewRow?.fc_ponderada_kg_cm2 || 0)
-      const edad_ponderada = Number(viewRow?.edad_ponderada_dias || 0)
-      const pv_unitario = Number(viewRow?.pv_unitario || 0)
-      const ventas_total = Number(viewRow?.ventas_total_concreto || 0)
+      ;(manualAdjustments || []).forEach(adj => {
+        const category = adj.category
+        const amount = Number(adj.amount || 0)
 
-      const costo_mp_unitario = Number(viewRow?.costo_mp_unitario || 0)
-      const consumo_cem_m3 = Number(viewRow?.consumo_cem_per_m3_kg || 0)
-      const costo_cem_m3 = Number(viewRow?.costo_cem_per_m3 || 0)
-      const costo_cem_pct = costo_mp_unitario > 0 ? (costo_cem_m3 / costo_mp_unitario) * 100 : 0
-      const costo_mp_total = viewRow?.costo_mp_total_concreto != null
-        ? Number(viewRow.costo_mp_total_concreto)
-        : (costo_mp_unitario * volumen_concreto)
-      const costo_mp_pct = viewRow?.costo_mp_percent != null
-        ? Number(viewRow.costo_mp_percent)
-        : (ventas_total > 0 ? (costo_mp_total / ventas_total) * 100 : 0)
+        if (adj.plant_id && targetPlantIds.includes(adj.plant_id)) {
+          const matchingPlant = (plants || []).find(p => p.id === adj.plant_id)
+          if (matchingPlant?.code) {
+            if (!manualByPlantCode.has(matchingPlant.code)) {
+              manualByPlantCode.set(matchingPlant.code, { nomina: 0, otros_indirectos: 0 })
+            }
+            const entry = manualByPlantCode.get(matchingPlant.code)!
+            if (category === 'nomina') {
+              entry.nomina += amount
+            } else if (category === 'otros_indirectos') {
+              entry.otros_indirectos += amount
+            }
+          }
+        }
 
-      // Spread
-      const spread_unitario = viewRow?.spread_unitario != null
-        ? Number(viewRow.spread_unitario)
-        : (pv_unitario - costo_mp_unitario)
-      const spread_unitario_pct = viewRow?.spread_unitario_percent != null
-        ? Number(viewRow.spread_unitario_percent)
-        : (pv_unitario > 0 ? (spread_unitario / pv_unitario) * 100 : 0)
+        if (adj.is_distributed && adj.distributions && Array.isArray(adj.distributions)) {
+          adj.distributions.forEach((dist: any) => {
+            const distAmount = Number(dist.amount || 0)
+            
+            if (dist.plant_id && targetPlantIds.includes(dist.plant_id)) {
+              const matchingPlant = (plants || []).find(p => p.id === dist.plant_id)
+              if (matchingPlant?.code) {
+                if (!manualByPlantCode.has(matchingPlant.code)) {
+                  manualByPlantCode.set(matchingPlant.code, { nomina: 0, otros_indirectos: 0 })
+                }
+                const entry = manualByPlantCode.get(matchingPlant.code)!
+                if (category === 'nomina') {
+                  entry.nomina += distAmount
+                } else if (category === 'otros_indirectos') {
+                  entry.otros_indirectos += distAmount
+                }
+              }
+            }
+            
+            if (dist.business_unit_id) {
+              const buPlants = (plants || []).filter(p => 
+                p.business_unit_id === dist.business_unit_id && targetPlantIds.includes(p.id)
+              )
+              if (buPlants.length > 0) {
+                const amountPerPlant = distAmount / buPlants.length
+                buPlants.forEach(plant => {
+                  if (plant.code) {
+                    if (!manualByPlantCode.has(plant.code)) {
+                      manualByPlantCode.set(plant.code, { nomina: 0, otros_indirectos: 0 })
+                    }
+                    const entry = manualByPlantCode.get(plant.code)!
+                    if (category === 'nomina') {
+                      entry.nomina += amountPerPlant
+                    } else if (category === 'otros_indirectos') {
+                      entry.otros_indirectos += amountPerPlant
+                    }
+                  }
+                })
+              }
+            }
+            
+            if (dist.department) {
+              const departmentPlants = departmentToPlants.get(dist.department) || []
+              const targetDepartmentPlants = departmentPlants.filter(pid => targetPlantIds.includes(pid))
+              if (targetDepartmentPlants.length > 0) {
+                const amountPerPlant = distAmount / targetDepartmentPlants.length
+                targetDepartmentPlants.forEach(plantId => {
+                  const matchingPlant = (plants || []).find(p => p.id === plantId)
+                  if (matchingPlant?.code) {
+                    if (!manualByPlantCode.has(matchingPlant.code)) {
+                      manualByPlantCode.set(matchingPlant.code, { nomina: 0, otros_indirectos: 0 })
+                    }
+                    const entry = manualByPlantCode.get(matchingPlant.code)!
+                    if (category === 'nomina') {
+                      entry.nomina += amountPerPlant
+                    } else if (category === 'otros_indirectos') {
+                      entry.otros_indirectos += amountPerPlant
+                    }
+                  }
+                })
+              }
+            }
+          })
+        }
+      })
 
-      // From gerencial: Diesel and Maintenance
-      // Diesel ALWAYS comes from FIFO calculation (dieselManttoByCode), never from gerencial API
-      // The gerencial API doesn't provide diesel costs with FIFO - we calculate it ourselves
-      const diesel_total = Number(dieselManttoByCode.get(plant.code)?.diesel_cost || 0)
-      // minimal per-plant logging removed
-      const diesel_unitario = volumen_concreto > 0 ? diesel_total / volumen_concreto : 0
-      const diesel_pct = ventas_total > 0 ? (diesel_total / ventas_total) * 100 : 0
+      const plantData = targetPlants.map(plant => {
+        const viewRow = viewDataByPlantCode.get(plant.code)
+        let gerencialPlant = gerencialPlantMapByCode.get(plant.code)
+        if (!gerencialPlant && dieselManttoByCode.has(plant.code)) {
+          const agg = dieselManttoByCode.get(plant.code)!
+          gerencialPlant = { diesel_cost: agg.diesel_cost, maintenance_cost: agg.maintenance_cost }
+        }
+        
+        const manual = manualByPlantCode.get(plant.code) || { nomina: 0, otros_indirectos: 0 }
 
-      const mantto_total = Number(gerencialPlant?.maintenance_cost || 0)
-      const mantto_unitario = volumen_concreto > 0 ? mantto_total / volumen_concreto : 0
-      const mantto_pct = ventas_total > 0 ? (mantto_total / ventas_total) * 100 : 0
+        const volumen_concreto = Number(viewRow?.volumen_concreto_m3 || 0)
+        const fc_ponderada = Number(viewRow?.fc_ponderada_kg_cm2 || 0)
+        const edad_ponderada = Number(viewRow?.edad_ponderada_dias || 0)
+        const pv_unitario = Number(viewRow?.pv_unitario || 0)
+        const ventas_total = Number(viewRow?.ventas_total_concreto || 0)
 
-      // From manual: Nómina and Otros Indirectos
-      const nomina_total = manual.nomina
-      const nomina_unitario = volumen_concreto > 0 ? nomina_total / volumen_concreto : 0
-      const nomina_pct = ventas_total > 0 ? (nomina_total / ventas_total) * 100 : 0
+        const costo_mp_unitario = Number(viewRow?.costo_mp_unitario || 0)
+        const consumo_cem_m3 = Number(viewRow?.consumo_cem_per_m3_kg || 0)
+        const costo_cem_m3 = Number(viewRow?.costo_cem_per_m3 || 0)
+        const costo_cem_pct = costo_mp_unitario > 0 ? (costo_cem_m3 / costo_mp_unitario) * 100 : 0
+        const costo_mp_total = viewRow?.costo_mp_total_concreto != null
+          ? Number(viewRow.costo_mp_total_concreto)
+          : (costo_mp_unitario * volumen_concreto)
+        const costo_mp_pct = viewRow?.costo_mp_percent != null
+          ? Number(viewRow.costo_mp_percent)
+          : (ventas_total > 0 ? (costo_mp_total / ventas_total) * 100 : 0)
 
-      const otros_indirectos_total = manual.otros_indirectos
-      const otros_indirectos_unitario = volumen_concreto > 0 ? otros_indirectos_total / volumen_concreto : 0
-      const otros_indirectos_pct = ventas_total > 0 ? (otros_indirectos_total / ventas_total) * 100 : 0
+        const spread_unitario = viewRow?.spread_unitario != null
+          ? Number(viewRow.spread_unitario)
+          : (pv_unitario - costo_mp_unitario)
+        const spread_unitario_pct = viewRow?.spread_unitario_percent != null
+          ? Number(viewRow.spread_unitario_percent)
+          : (pv_unitario > 0 ? (spread_unitario / pv_unitario) * 100 : 0)
 
-      // Total Costo OP
-      const total_costo_op = diesel_total + mantto_total + nomina_total + otros_indirectos_total
-      const total_costo_op_pct = ventas_total > 0 ? (total_costo_op / ventas_total) * 100 : 0
+        const diesel_total = Number(dieselManttoByCode.get(plant.code)?.diesel_cost || 0)
+        const diesel_unitario = volumen_concreto > 0 ? diesel_total / volumen_concreto : 0
+        const diesel_pct = ventas_total > 0 ? (diesel_total / ventas_total) * 100 : 0
 
-      // EBITDA
-      const ebitda = ventas_total - costo_mp_total - total_costo_op
-      const ebitda_pct = ventas_total > 0 ? (ebitda / ventas_total) * 100 : 0
+        const mantto_total = Number(gerencialPlant?.maintenance_cost || 0)
+        const mantto_unitario = volumen_concreto > 0 ? mantto_total / volumen_concreto : 0
+        const mantto_pct = ventas_total > 0 ? (mantto_total / ventas_total) * 100 : 0
 
-      // Bombeo data from vw_pumping_analysis_unified
-      const pumpingData = pumpingDataByPlantCode.get(plant.code)
-      const ingresos_bombeo_vol = pumpingData ? pumpingData.volumen_bombeo_m3 : 0
-      const ingresos_bombeo_total = pumpingData ? pumpingData.subtotal_total : 0
-      const ingresos_bombeo_unit = ingresos_bombeo_vol > 0 ? ingresos_bombeo_total / ingresos_bombeo_vol : 0
+        const nomina_total = manual.nomina
+        const nomina_unitario = volumen_concreto > 0 ? nomina_total / volumen_concreto : 0
+        const nomina_pct = ventas_total > 0 ? (nomina_total / ventas_total) * 100 : 0
 
-      // EBITDA con bombeo (EBITDA + bombeo total)
-      const ebitda_con_bombeo = ebitda + ingresos_bombeo_total
-      const total_ingresos_con_bombeo = ventas_total + ingresos_bombeo_total
-      const ebitda_con_bombeo_pct = total_ingresos_con_bombeo > 0 ? (ebitda_con_bombeo / total_ingresos_con_bombeo) * 100 : 0
+        const otros_indirectos_total = manual.otros_indirectos
+        const otros_indirectos_unitario = volumen_concreto > 0 ? otros_indirectos_total / volumen_concreto : 0
+        const otros_indirectos_pct = ventas_total > 0 ? (otros_indirectos_total / ventas_total) * 100 : 0
 
-      return {
-        plant_id: plant.id,
-        plant_name: plant.name,
-        plant_code: plant.code,
-        business_unit_id: plant.business_unit_id,
+        const total_costo_op = diesel_total + mantto_total + nomina_total + otros_indirectos_total
+        const total_costo_op_pct = ventas_total > 0 ? (total_costo_op / ventas_total) * 100 : 0
 
-        // Ingresos Concreto
-        volumen_concreto,
-        fc_ponderada,
-        edad_ponderada,
-        pv_unitario,
-        ventas_total,
+        const ebitda = ventas_total - costo_mp_total - total_costo_op
+        const ebitda_pct = ventas_total > 0 ? (ebitda / ventas_total) * 100 : 0
 
-        // Costo Materia Prima
-        costo_mp_unitario,
-        consumo_cem_m3,
-        costo_cem_m3,
-        costo_cem_pct,
-        costo_mp_total,
-        costo_mp_pct,
+        const pumpingDataForPlant = pumpingDataByPlantCode.get(plant.code)
+        const ingresos_bombeo_vol = pumpingDataForPlant ? pumpingDataForPlant.volumen_bombeo_m3 : 0
+        const ingresos_bombeo_total = pumpingDataForPlant ? pumpingDataForPlant.subtotal_total : 0
+        const ingresos_bombeo_unit = ingresos_bombeo_vol > 0 ? ingresos_bombeo_total / ingresos_bombeo_vol : 0
 
-        // Spread
-        spread_unitario,
-        spread_unitario_pct,
+        const ebitda_con_bombeo = ebitda + ingresos_bombeo_total
+        const total_ingresos_con_bombeo = ventas_total + ingresos_bombeo_total
+        const ebitda_con_bombeo_pct = total_ingresos_con_bombeo > 0 ? (ebitda_con_bombeo / total_ingresos_con_bombeo) * 100 : 0
 
-        // Costo Operativo
-        diesel_total,
-        diesel_unitario,
-        diesel_pct,
-        mantto_total,
-        mantto_unitario,
-        mantto_pct,
-        nomina_total,
-        nomina_unitario,
-        nomina_pct,
-        otros_indirectos_total,
-        otros_indirectos_unitario,
-        otros_indirectos_pct,
-        total_costo_op,
-        total_costo_op_pct,
+        return {
+          plant_id: plant.id,
+          plant_name: plant.name,
+          plant_code: plant.code,
+          business_unit_id: plant.business_unit_id,
+          volumen_concreto,
+          fc_ponderada,
+          edad_ponderada,
+          pv_unitario,
+          ventas_total,
+          costo_mp_unitario,
+          consumo_cem_m3,
+          costo_cem_m3,
+          costo_cem_pct,
+          costo_mp_total,
+          costo_mp_pct,
+          spread_unitario,
+          spread_unitario_pct,
+          diesel_total,
+          diesel_unitario,
+          diesel_pct,
+          mantto_total,
+          mantto_unitario,
+          mantto_pct,
+          nomina_total,
+          nomina_unitario,
+          nomina_pct,
+          otros_indirectos_total,
+          otros_indirectos_unitario,
+          otros_indirectos_pct,
+          total_costo_op,
+          total_costo_op_pct,
+          ebitda,
+          ebitda_pct,
+          ingresos_bombeo_vol,
+          ingresos_bombeo_unit,
+          ingresos_bombeo_total,
+          ebitda_con_bombeo,
+          ebitda_con_bombeo_pct
+        }
+      })
 
-        // EBITDA
-        ebitda,
-        ebitda_pct,
+      const filteredPlantData = plantData.filter(plant => {
+        const hasData = plant.ventas_total > 0 || 
+          plant.diesel_total > 0 || 
+          plant.mantto_total > 0 || 
+          plant.nomina_total > 0 || 
+          plant.otros_indirectos_total > 0
+        return hasData
+      })
 
-        // Bombeo
-        ingresos_bombeo_vol,
-        ingresos_bombeo_unit,
-        ingresos_bombeo_total,
+      return filteredPlantData
+    }
 
-        // EBITDA con bombeo
-        ebitda_con_bombeo,
-        ebitda_con_bombeo_pct
-      }
-    })
+    const currentPlants = await buildMonthSnapshot(currentRange)
+    const previousPlants = await buildMonthSnapshot(previousRange)
 
-    // Filter out plants with no data (ventas_total === 0 and all operational costs zero)
-    const filteredPlantData = plantData.filter(plant => {
-      const hasData = plant.ventas_total > 0 || 
-        plant.diesel_total > 0 || 
-        plant.mantto_total > 0 || 
-        plant.nomina_total > 0 || 
-        plant.otros_indirectos_total > 0
-      return hasData
+    const previousMap = new Map<string, any>()
+    previousPlants.forEach(p => previousMap.set(p.plant_code, p))
+
+    const deltaMetrics = [
+      'volumen_concreto',
+      'ventas_total',
+      'diesel_total',
+      'diesel_unitario',
+      'diesel_pct',
+      'total_costo_op',
+      'ebitda',
+      'otros_indirectos_total',
+      'nomina_total',
+      'mantto_total'
+    ]
+
+    const deltaByPlant: Record<string, Record<string, { current: number; previous: number; delta: number; deltaPct: number | null }>> = {}
+
+    const calcDelta = (curr: number, prev: number) => {
+      const delta = curr - prev
+      const deltaPct = prev === 0 ? null : (delta / prev) * 100
+      return { current: curr, previous: prev, delta, deltaPct }
+    }
+
+    currentPlants.forEach(plant => {
+      const prev = previousMap.get(plant.plant_code) || {}
+      deltaByPlant[plant.plant_code || plant.plant_id] = {}
+      deltaMetrics.forEach(metric => {
+        const currVal = Number((plant as any)[metric] || 0)
+        const prevVal = Number((prev as any)[metric] || 0)
+        deltaByPlant[plant.plant_code || plant.plant_id][metric] = calcDelta(currVal, prevVal)
+      })
     })
 
     return NextResponse.json({
       month,
-      plants: filteredPlantData,
+      comparisonMonth: previousRange.periodMonth.slice(0, 7),
+      plants: currentPlants,
+      comparison: {
+        month: previousRange.periodMonth.slice(0, 7),
+        plants: previousPlants
+      },
+      deltas: deltaByPlant,
       filters: {
         businessUnits: businessUnits || [],
         plants: plants || []
