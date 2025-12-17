@@ -1,10 +1,10 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(
-  request: Request,
-  { params }: { params: { id: string } }
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const cookieStore = await cookies()
@@ -26,8 +26,7 @@ export async function POST(
       }
     )
 
-    const awaitedParams = await params
-    const templateId = awaitedParams.id
+    const { id: templateId } = await params
     const { name, description, frequency, model_id, interval_id } = await request.json()
 
     // Validate required fields
