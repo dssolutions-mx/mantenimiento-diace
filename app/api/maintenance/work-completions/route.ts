@@ -246,6 +246,8 @@ export async function POST(request: Request) {
         // Override hours/kilometers with equipment_hours/equipment_kilometers from completionData if available
         hours: isKilometers ? null : (completionData.equipment_hours || maintenanceHistoryData.hours || null),
         kilometers: isKilometers ? (completionData.equipment_kilometers || maintenanceHistoryData.kilometers || null) : null,
+        // Include completed tasks if provided
+        completed_tasks: completionData.completed_tasks || maintenanceHistoryData.completed_tasks || null,
       };
 
       // Derive required NOT NULL fields for maintenance_history
@@ -292,7 +294,8 @@ export async function POST(request: Request) {
         hours: enhancedHistoryData.hours || (isKilometers ? 'null (using kilometers)' : 'no_hours_provided'),
         kilometers: enhancedHistoryData.kilometers || (isKilometers ? 'no_kilometers_provided' : 'null (using hours)'),
         labor_hours: enhancedHistoryData.labor_hours,
-        maintenance_plan_id: enhancedHistoryData.maintenance_plan_id || null
+        maintenance_plan_id: enhancedHistoryData.maintenance_plan_id || null,
+        completed_tasks_count: enhancedHistoryData.completed_tasks ? (Array.isArray(enhancedHistoryData.completed_tasks) ? enhancedHistoryData.completed_tasks.length : 1) : 0
       }));
       
       const { data: historyData, error: historyError } = await supabase

@@ -9827,6 +9827,7 @@ CREATE TABLE IF NOT EXISTS "public"."work_orders" (
     "priority" "text" DEFAULT 'Media'::"text",
     "status" "text" DEFAULT 'Pendiente'::"text",
     "required_parts" "jsonb",
+    "required_tasks" "jsonb" DEFAULT '[]'::"jsonb",
     "estimated_cost" numeric(10,2),
     "checklist_id" "uuid",
     "maintenance_plan_id" "uuid",

@@ -59,6 +59,9 @@ interface MaintenanceInterval {
 interface MaintenanceTask {
   id: string;
   description: string;
+  type?: string;
+  estimated_time?: number;
+  requires_specialist?: boolean;
   task_parts: TaskPart[];
 }
 
@@ -362,6 +365,9 @@ export default function NewMaintenancePage({ params }: NewMaintenancePageProps) 
       
       if (workOrderError) throw workOrderError;
 
+      // Prepare update data for parts and tasks
+      const updateData: any = {};
+
       // Agregar repuestos requeridos a la orden de trabajo
       if (requiredParts.length > 0) {
         const partsData = requiredParts.map(part => ({
@@ -371,10 +377,33 @@ export default function NewMaintenancePage({ params }: NewMaintenancePageProps) 
           unit_price: part.estimatedCost ? Number(part.estimatedCost) : 0,
           total_price: part.estimatedCost ? Number(part.estimatedCost) * part.quantity : 0
         }));
+        updateData.required_parts = partsData;
+      }
 
+      // Agregar tareas requeridas del plan de mantenimiento
+      if (planId && maintenancePlan && maintenancePlan.maintenance_tasks && maintenancePlan.maintenance_tasks.length > 0) {
+        const tasksData = maintenancePlan.maintenance_tasks.map((task: MaintenanceTask) => ({
+          id: task.id,
+          description: task.description,
+          type: task.type || 'standard',
+          estimated_time: task.estimated_time || null,
+          requires_specialist: task.requires_specialist || false,
+          parts: (task.task_parts || []).map((part: TaskPart) => ({
+            id: part.id,
+            name: part.name,
+            part_number: part.part_number || undefined,
+            quantity: part.quantity,
+            cost: part.cost ? Number(part.cost) : undefined
+          }))
+        }));
+        updateData.required_tasks = tasksData;
+      }
+
+      // Update work order with parts and/or tasks if available
+      if (Object.keys(updateData).length > 0) {
         const { error: updateError } = await supabase
           .from('work_orders')
-          .update({ required_parts: partsData })
+          .update(updateData)
           .eq('id', workOrderResult.id);
 
         if (updateError) throw updateError;

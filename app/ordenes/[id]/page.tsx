@@ -306,6 +306,27 @@ export default async function WorkOrderDetailsPage({
   const totalPartsCost = requiredParts.length > 0
     ? requiredParts.reduce((total: number, part: any) => total + (Number(part.total_price) || 0), 0)
     : 0
+
+  // Parse required tasks if exists
+  const requiredTasks = extendedWorkOrder.required_tasks
+    ? typeof extendedWorkOrder.required_tasks === 'string'
+      ? JSON.parse(extendedWorkOrder.required_tasks)
+      : extendedWorkOrder.required_tasks
+    : []
+
+  // Parse completed tasks from maintenance history if completed
+  let completedTaskIds: string[] = []
+  if (isCompleted && maintenanceHistory?.completed_tasks) {
+    const completedTasks = typeof maintenanceHistory.completed_tasks === 'string'
+      ? JSON.parse(maintenanceHistory.completed_tasks)
+      : maintenanceHistory.completed_tasks
+    
+    if (Array.isArray(completedTasks)) {
+      completedTaskIds = completedTasks
+        .filter((task: any) => task.completed === true)
+        .map((task: any) => task.task_id || task.id)
+    }
+  }
     
   // Parse evidence photos
   const creationPhotos: EvidenceItem[] = extendedWorkOrder.creation_photos 
@@ -659,6 +680,92 @@ export default async function WorkOrderDetailsPage({
                     </Button>
                   </div>
                 )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Required Tasks Section */}
+          {requiredTasks.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between">
+                  Tareas de Mantenimiento
+                  {isCompleted && completedTaskIds.length > 0 && (
+                    <Badge variant="default">
+                      {completedTaskIds.length} de {requiredTasks.length} completadas
+                    </Badge>
+                  )}
+                </CardTitle>
+                <CardDescription>
+                  Tareas requeridas del plan de mantenimiento
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {requiredTasks.map((task: any, index: number) => {
+                    const isCompleted = completedTaskIds.includes(task.id);
+                    return (
+                      <div 
+                        key={task.id || index} 
+                        className={cn(
+                          "border rounded-lg p-4",
+                          isCompleted ? "bg-green-50/50 border-green-200" : "bg-gray-50/50"
+                        )}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              {isCompleted && (
+                                <CheckCircle className="h-4 w-4 text-green-600" />
+                              )}
+                              <h4 className="font-medium text-sm">{task.description}</h4>
+                              {task.type && (
+                                <Badge variant="secondary" className="text-xs">
+                                  {task.type}
+                                </Badge>
+                              )}
+                              {task.requires_specialist && (
+                                <Badge variant="outline" className="text-xs">
+                                  Requiere Especialista
+                                </Badge>
+                              )}
+                            </div>
+                            {task.estimated_time && (
+                              <p className="text-xs text-muted-foreground mb-2">
+                                Tiempo estimado: {task.estimated_time} horas
+                              </p>
+                            )}
+                            {task.parts && task.parts.length > 0 && (
+                              <div className="mt-2">
+                                <p className="text-xs font-medium text-muted-foreground mb-1">
+                                  Repuestos requeridos:
+                                </p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs text-muted-foreground">
+                                  {task.parts.map((part: any, partIdx: number) => (
+                                    <div key={partIdx} className="flex items-center gap-2">
+                                      <span>• {part.name}</span>
+                                      {part.part_number && (
+                                        <span className="text-muted-foreground/70">
+                                          ({part.part_number})
+                                        </span>
+                                      )}
+                                      <span className="font-medium">x{part.quantity}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          {isCompleted && (
+                            <Badge variant="default" className="ml-2">
+                              Completada
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </CardContent>
             </Card>
           )}

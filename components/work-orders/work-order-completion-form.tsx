@@ -108,6 +108,8 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
   const [isLoading, setIsLoading] = useState(false)
   const [workOrder, setWorkOrder] = useState<any>(null)
   const [requiredParts, setRequiredParts] = useState<any[]>([])
+  const [requiredTasks, setRequiredTasks] = useState<any[]>([])
+  const [completedTasks, setCompletedTasks] = useState<Record<string, boolean>>({})
   const [completionEvidence, setCompletionEvidence] = useState<EvidencePhoto[]>([])
   const [showEvidenceDialog, setShowEvidenceDialog] = useState(false)
   const [costSource, setCostSource] = useState<'estimated' | 'quoted' | 'confirmed'>('estimated')
@@ -188,6 +190,30 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
           }
         }
         
+        // Load required tasks from work order
+        if (orderData.required_tasks) {
+          try {
+            const tasks = typeof orderData.required_tasks === "string" 
+              ? JSON.parse(orderData.required_tasks) 
+              : orderData.required_tasks;
+            
+            if (Array.isArray(tasks) && tasks.length > 0) {
+              setRequiredTasks(tasks);
+              // Initialize completed tasks state - all false by default
+              const initialCompleted: Record<string, boolean> = {};
+              tasks.forEach((task: any) => {
+                if (task.id) {
+                  initialCompleted[task.id] = false;
+                }
+              });
+              setCompletedTasks(initialCompleted);
+              console.log('Loaded required tasks:', tasks.length);
+            }
+          } catch (e) {
+            console.error('Error parsing required tasks:', e);
+          }
+        }
+
         // Log maintenance_plan_id for debugging
         console.log('Work order data loaded:', {
           id: orderData.id,
@@ -195,7 +221,8 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
           status: orderData.status,
           maintenance_plan_id: orderData.maintenance_plan_id || null,
           maintenance_unit: unit,
-          asset_current_value: orderData.asset ? getCurrentValue(orderData.asset, unit) : 0
+          asset_current_value: orderData.asset ? getCurrentValue(orderData.asset, unit) : 0,
+          required_tasks_count: orderData.required_tasks ? (typeof orderData.required_tasks === "string" ? JSON.parse(orderData.required_tasks) : orderData.required_tasks).length : 0
         });
         
         // Check if this is a preventive order that requires checklist
@@ -475,6 +502,15 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
         ...data,
         parts_used: formattedParts
       };
+
+      // Prepare completed tasks data
+      const completedTasksData = requiredTasks
+        .filter((task: any) => completedTasks[task.id])
+        .map((task: any) => ({
+          task_id: task.id,
+          completed: true,
+          completed_at: updatedData.completion_date.toISOString()
+        }));
       
               // Preparar datos para la API - ajustar según lo que el backend realmente acepta
         const formattedData = {
@@ -490,6 +526,7 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
             completion_date: updatedData.completion_date.toISOString(),
             completion_time: updatedData.completion_time,
             parts_used: formattedParts, // Incluir los repuestos formateados
+            completed_tasks: completedTasksData.length > 0 ? completedTasksData : undefined,
             completion_photos: completionEvidence.map(evidence => ({
               url: evidence.url,
               description: evidence.description,
@@ -515,6 +552,8 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
           actions: updatedData.resolution_details,
           // Important: Include the maintenance_plan_id from the work order to properly mark the maintenance as completed
           maintenance_plan_id: workOrder.maintenance_plan_id || null,
+          // Include completed tasks
+          completed_tasks: completedTasksData.length > 0 ? completedTasksData : null,
           // Incluir todos los campos de completion que no van en work_orders
           downtime_hours: updatedData.downtime_hours,
           resolution_details: updatedData.resolution_details,
@@ -1020,6 +1059,85 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
               )}
             </div>
             
+            <Separator />
+
+            {/* Required Tasks Section */}
+            {requiredTasks.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="text-md font-medium">Tareas de Mantenimiento</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Marque las tareas que fueron completadas durante este mantenimiento
+                    </p>
+                  </div>
+                  <Badge variant="outline">
+                    {Object.values(completedTasks).filter(Boolean).length} de {requiredTasks.length} completadas
+                  </Badge>
+                </div>
+
+                <div className="border rounded-md p-4 space-y-4">
+                  {requiredTasks.map((task: any) => (
+                    <div key={task.id} className="border rounded-md p-4 space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-start gap-3 flex-1">
+                          <Switch
+                            checked={completedTasks[task.id] || false}
+                            onCheckedChange={(checked) => {
+                              setCompletedTasks(prev => ({
+                                ...prev,
+                                [task.id]: checked
+                              }));
+                            }}
+                          />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <h4 className="text-sm font-medium">{task.description}</h4>
+                              {task.type && (
+                                <Badge variant="secondary" className="text-xs">
+                                  {task.type}
+                                </Badge>
+                              )}
+                              {task.requires_specialist && (
+                                <Badge variant="outline" className="text-xs">
+                                  Requiere Especialista
+                                </Badge>
+                              )}
+                            </div>
+                            {task.estimated_time && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Tiempo estimado: {task.estimated_time} horas
+                              </p>
+                            )}
+                            {task.parts && task.parts.length > 0 && (
+                              <div className="mt-2">
+                                <p className="text-xs font-medium text-muted-foreground mb-1">
+                                  Repuestos requeridos:
+                                </p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs text-muted-foreground">
+                                  {task.parts.map((part: any, idx: number) => (
+                                    <div key={idx} className="flex items-center gap-2">
+                                      <span>• {part.name}</span>
+                                      {part.part_number && (
+                                        <span className="text-muted-foreground/70">
+                                          ({part.part_number})
+                                        </span>
+                                      )}
+                                      <span className="font-medium">x{part.quantity}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <Separator />
             
             {/* Gastos adicionales */}
