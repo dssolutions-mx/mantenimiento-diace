@@ -4,12 +4,12 @@ import { WorkOrderStatus, PurchaseOrderStatus } from "@/types";
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const supabase = createClient();
     const { purchaseOrderStatus } = await request.json();
-    const workOrderId = params.id;
+    const { id: workOrderId } = await params;
 
     // Verify that the work order exists
     const { data: workOrder, error: workOrderError } = await supabase

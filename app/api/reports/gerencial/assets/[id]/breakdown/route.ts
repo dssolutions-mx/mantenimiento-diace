@@ -2,13 +2,13 @@ import { NextResponse } from 'next/server'
 import { createClient as createServerSupabase } from '@/lib/supabase-server'
 import { createClient } from '@supabase/supabase-js'
 
-export async function GET(request: Request, { params }: { params: { id: string } }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const supabase = await createServerSupabase()
     const url = new URL(request.url)
     const startDate = url.searchParams.get('startDate')
     const endDate = url.searchParams.get('endDate')
-    const assetId = params.id
+    const { id: assetId } = await params
 
     if (!startDate || !endDate) {
       return NextResponse.json({ error: 'startDate and endDate are required' }, { status: 400 })
