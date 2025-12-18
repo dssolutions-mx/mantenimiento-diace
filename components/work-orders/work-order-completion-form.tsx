@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { z } from "zod"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ArrowLeft, CalendarCheck, CheckCircle, Clock, CalendarIcon, Plus, Trash2, ShoppingCart, Camera, FileText, ClipboardCheck, AlertTriangle, ExternalLinkIcon } from "lucide-react"
+import { ArrowLeft, CalendarCheck, CheckCircle, Clock, CalendarIcon, Plus, Trash2, ShoppingCart, Camera, FileText, AlertTriangle, ExternalLinkIcon } from "lucide-react"
 import { createClient } from "@/lib/supabase"
 import { Separator } from "@/components/ui/separator"
 import { toast } from "@/components/ui/use-toast"
@@ -23,6 +23,7 @@ import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { Switch } from "@/components/ui/switch"
+import { Checkbox } from "@/components/ui/checkbox"
 import { EvidenceUpload, type EvidencePhoto } from "@/components/ui/evidence-upload"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -114,11 +115,6 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
   const [showEvidenceDialog, setShowEvidenceDialog] = useState(false)
   const [costSource, setCostSource] = useState<'estimated' | 'quoted' | 'confirmed'>('estimated')
   const [purchaseOrderId, setPurchaseOrderId] = useState<string | null>(null)
-  const [checklistStatus, setChecklistStatus] = useState<{
-    required: boolean
-    completed: boolean
-    checklistId: string | null
-  }>({ required: false, completed: false, checklistId: null })
   const [maintenanceUnit, setMaintenanceUnit] = useState<MaintenanceUnit>('hours')
 
   // Default form values
@@ -224,38 +220,6 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
           asset_current_value: orderData.asset ? getCurrentValue(orderData.asset, unit) : 0,
           required_tasks_count: orderData.required_tasks ? (typeof orderData.required_tasks === "string" ? JSON.parse(orderData.required_tasks) : orderData.required_tasks).length : 0
         });
-        
-        // Check if this is a preventive order that requires checklist
-        if (orderData.type === MaintenanceType.Preventive) {
-          // Check if order is ready to execute (PO approved/received)
-          // @ts-ignore - RPC function created in recent migration
-          const { data: readyData } = await supabase
-            .rpc('is_work_order_ready_to_execute', { p_work_order_id: workOrderId })
-          
-          if (readyData) {
-            // Get required checklist
-            // @ts-ignore - RPC function created in recent migration
-            const { data: checklistId } = await supabase
-              .rpc('get_required_checklist_for_work_order', { p_work_order_id: workOrderId })
-            
-            if (checklistId) {
-              // Check if checklist is completed
-              // @ts-ignore - Table created in recent migration
-              const { data: maintenanceChecklist } = await supabase
-                .from('maintenance_checklists')
-                .select('*')
-                .eq('work_order_id', workOrderId)
-                .eq('status', 'completed')
-                .single()
-              
-              setChecklistStatus({
-                required: true,
-                completed: !!maintenanceChecklist,
-                checklistId: checklistId
-              })
-            }
-          }
-        }
         
         // Determine which parts and costs to use - Priority: PO Items > Required Parts
         let parts = [];
@@ -365,15 +329,19 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
     }
 
     loadWorkOrder()
-  }, [workOrderId, form])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workOrderId]) // Removed 'form' from dependencies to prevent infinite loops
+
+  // Use ref to prevent infinite loops
+  const isUpdatingRef = useRef(false);
 
   // Update total cost when labor cost or additional expenses change
   useEffect(() => {
-    let isUpdating = false;
-
-    // Iniciar con el cálculo correcto al montar el componente
-    if (!isUpdating) {
-      isUpdating = true;
+    // Calculate initial total cost
+    const calculateTotal = () => {
+      if (isUpdatingRef.current) return;
+      
+      isUpdatingRef.current = true;
       try {
         const partsCost = requiredParts.reduce((sum, part) => sum + (Number(part.total_price) || 0), 0);
         const formValues = form.getValues();
@@ -381,63 +349,48 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
         const additionalExpensesTotal = Number(formValues.additional_expenses_total) || 0;
         
         const totalCost = partsCost + laborCost + additionalExpensesTotal;
-        console.log('Cálculo inicial del total:', {partsCost, laborCost, additionalExpensesTotal, totalCost});
-        
-        form.setValue("total_cost", totalCost, { shouldDirty: true });
+        form.setValue("total_cost", totalCost, { shouldDirty: false, shouldValidate: false });
       } finally {
-        isUpdating = false;
+        isUpdatingRef.current = false;
       }
-    }
+    };
 
+    // Initial calculation
+    calculateTotal();
+
+    // Watch for changes with debouncing
     const subscription = form.watch((value, { name }) => {
-      // Prevent recursive updates that cause infinite loops
-      if (isUpdating) return;
-      
-      console.log('Watch triggered by:', name, 'with value:', value && typeof value === 'object' ? JSON.stringify(value) : value);
+      if (isUpdatingRef.current) return;
       
       if (name === "labor_cost" || name === "parts_used" || name?.startsWith("additional_expenses") || name === "has_additional_expenses") {
-        isUpdating = true;
+        isUpdatingRef.current = true;
         
-        try {
-          // Ensure numeric values
-          const partsCost = requiredParts.reduce((sum, part) => sum + (Number(part.total_price) || 0), 0);
-          const laborCost = Number(value.labor_cost) || 0;
-          
-          // Calculate additional expenses total
-          let additionalExpensesTotal = 0;
-          if (value.has_additional_expenses && Array.isArray(value.additional_expenses) && value.additional_expenses.length > 0) {
-            additionalExpensesTotal = value.additional_expenses.reduce(
-              (sum, expense) => sum + (parseFloat(expense?.amount?.toString() || "0")), 
-              0
-            );
-            // Update additional_expenses_total field
-            form.setValue("additional_expenses_total", additionalExpensesTotal, { shouldDirty: true });
-          } else {
-            // Reset the additional expenses if has_additional_expenses is false
-            if (name === "has_additional_expenses" && !value.has_additional_expenses) {
-              form.setValue("additional_expenses", [], { shouldDirty: true });
-              form.setValue("additional_expenses_total", 0, { shouldDirty: true });
-              additionalExpensesTotal = 0;
+        setTimeout(() => {
+          try {
+            const partsCost = requiredParts.reduce((sum, part) => sum + (Number(part.total_price) || 0), 0);
+            const laborCost = Number(value.labor_cost) || 0;
+            
+            let additionalExpensesTotal = 0;
+            if (value.has_additional_expenses && Array.isArray(value.additional_expenses) && value.additional_expenses.length > 0) {
+              additionalExpensesTotal = value.additional_expenses.reduce(
+                (sum, expense) => sum + (parseFloat(expense?.amount?.toString() || "0")), 
+                0
+              );
+              form.setValue("additional_expenses_total", additionalExpensesTotal, { shouldDirty: false, shouldValidate: false });
+            } else {
+              if (name === "has_additional_expenses" && !value.has_additional_expenses) {
+                form.setValue("additional_expenses", [], { shouldDirty: false, shouldValidate: false });
+                form.setValue("additional_expenses_total", 0, { shouldDirty: false, shouldValidate: false });
+                additionalExpensesTotal = 0;
+              }
             }
+            
+            const totalCost = partsCost + laborCost + additionalExpensesTotal;
+            form.setValue("total_cost", totalCost, { shouldDirty: false, shouldValidate: false });
+          } finally {
+            isUpdatingRef.current = false;
           }
-          
-          // Perform explicit addition to avoid string concatenation
-          const totalCost = partsCost + laborCost + additionalExpensesTotal;
-          console.log('Calculating total:', {
-            partsCost: Number(partsCost), 
-            laborCost: Number(laborCost), 
-            additionalExpensesTotal: Number(additionalExpensesTotal), 
-            totalCost: Number(totalCost),
-            laborCostType: typeof laborCost,
-            valueLabor: value.labor_cost
-          });
-          
-          // Update total cost
-          form.setValue("total_cost", totalCost, { shouldDirty: true });
-        } finally {
-          // Always reset the flag to allow future updates
-          isUpdating = false;
-        }
+        }, 100); // Debounce updates
       }
     });
     
@@ -484,6 +437,8 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
       console.log("Iniciando envío del formulario con datos:", data);
       setIsLoading(true);
       
+      const supabase = createClient()
+      
       // Asegurarnos de que requiredParts tenga el formato correcto
       const formattedParts = requiredParts.map(part => ({
         part_id: part.id || part.part_id || '',  // Asegurar que part_id siempre tiene un valor
@@ -511,7 +466,7 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
           completed: true,
           completed_at: updatedData.completion_date.toISOString()
         }));
-      
+
               // Preparar datos para la API - ajustar según lo que el backend realmente acepta
         const formattedData = {
           workOrderId,
@@ -804,38 +759,6 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
         </div>
       </CardHeader>
       <CardContent>
-        {/* Alert for preventive maintenance checklist requirement */}
-        {workOrder?.type === MaintenanceType.Preventive && checklistStatus.required && (
-          <Alert className={checklistStatus.completed ? "border-green-500" : "border-orange-500"}>
-            {checklistStatus.completed ? (
-              <CheckCircle className="h-4 w-4 text-green-600" />
-            ) : (
-              <AlertTriangle className="h-4 w-4 text-orange-600" />
-            )}
-            <AlertTitle>
-              {checklistStatus.completed 
-                ? "Checklist de Mantenimiento Completado" 
-                : "Checklist de Mantenimiento Requerido"}
-            </AlertTitle>
-            <AlertDescription>
-              {checklistStatus.completed ? (
-                <span>El checklist de mantenimiento preventivo ha sido completado correctamente.</span>
-              ) : (
-                <div className="space-y-2">
-                  <span>Esta orden de trabajo preventiva requiere completar un checklist de mantenimiento antes de marcarla como completada.</span>
-                  <div className="flex gap-2 mt-2">
-                    <Button size="sm" asChild>
-                      <Link href={`/checklists/mantenimiento/${workOrderId}`}>
-                        <ClipboardCheck className="h-4 w-4 mr-2" />
-                        Completar Checklist
-                      </Link>
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </AlertDescription>
-          </Alert>
-        )}
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 mt-6">
@@ -1078,18 +1001,25 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
 
                 <div className="border rounded-md p-4 space-y-4">
                   {requiredTasks.map((task: any) => (
-                    <div key={task.id} className="border rounded-md p-4 space-y-3">
+                    <div key={task.id} className={cn(
+                      "border rounded-md p-4 space-y-3 transition-colors",
+                      completedTasks[task.id] && "bg-green-50 border-green-200"
+                    )}>
                       <div className="flex items-start justify-between">
                         <div className="flex items-start gap-3 flex-1">
-                          <Switch
-                            checked={completedTasks[task.id] || false}
-                            onCheckedChange={(checked) => {
-                              setCompletedTasks(prev => ({
-                                ...prev,
-                                [task.id]: checked
-                              }));
-                            }}
-                          />
+                          <div className="pt-1">
+                            <Checkbox
+                              id={`task-${task.id}`}
+                              checked={completedTasks[task.id] || false}
+                              onCheckedChange={(checked) => {
+                                setCompletedTasks(prev => ({
+                                  ...prev,
+                                  [task.id]: checked === true
+                                }));
+                              }}
+                              className="h-5 w-5"
+                            />
+                          </div>
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
                               <h4 className="text-sm font-medium">{task.description}</h4>
@@ -1341,7 +1271,7 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
                 </Button>
                 <Button 
                   type="submit" 
-                  disabled={isLoading || (checklistStatus.required && !checklistStatus.completed)}
+                  disabled={isLoading}
                 >
                   {isLoading ? (
                     <>
@@ -1356,11 +1286,6 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
                   )}
                 </Button>
               </div>
-              {checklistStatus.required && !checklistStatus.completed && (
-                <p className="text-sm text-orange-600 mt-2">
-                  * Debe completar el checklist de mantenimiento antes de finalizar la orden
-                </p>
-              )}
               {Object.keys(form.formState.errors).length > 0 && (
                 <div className="mt-4 p-3 border border-destructive rounded-md bg-destructive/10 text-sm">
                   <p className="font-semibold mb-1">Por favor, corrige los siguientes errores:</p>
@@ -1388,6 +1313,7 @@ export function WorkOrderCompletionForm({ workOrderId, initialData }: WorkOrderC
         title="Evidencia de Finalización"
         description="Suba fotografías del trabajo completado, partes reemplazadas, recibos y cualquier documentación relevante"
       />
+
     </Card>
   )
 } 

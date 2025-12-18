@@ -85,6 +85,13 @@ export default async function WorkOrderPrintPage({
     ? sanitizedRequiredParts.reduce((total: number, part: any) => total + (Number(part.total_price) || 0), 0)
     : 0
 
+  // Parse required tasks
+  const requiredTasks = extendedWorkOrder.required_tasks
+    ? typeof extendedWorkOrder.required_tasks === 'string'
+      ? JSON.parse(extendedWorkOrder.required_tasks)
+      : extendedWorkOrder.required_tasks
+    : []
+
   return (
     <WorkOrderPrintDocument
       workOrder={extendedWorkOrder}
@@ -93,6 +100,7 @@ export default async function WorkOrderPrintPage({
       profiles={profiles}
       requiredParts={sanitizedRequiredParts}
       totalPartsCost={totalPartsCost}
+      requiredTasks={requiredTasks}
     />
   )
 }

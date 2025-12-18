@@ -197,6 +197,8 @@ export function MaintenanceChecklistExecution({ workOrderId }: MaintenanceCheckl
   }
 
   const handleSubmit = async () => {
+    if (isSubmitting) return // Prevent double submission
+    
     if (!isChecklistComplete()) {
       toast.error('Por favor complete todos los campos requeridos')
       return
@@ -328,16 +330,24 @@ export function MaintenanceChecklistExecution({ workOrderId }: MaintenanceCheckl
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setCurrentSection(Math.max(0, currentSection - 1))}
-                disabled={currentSection === 0}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setCurrentSection(Math.max(0, currentSection - 1))
+                }}
+                disabled={currentSection === 0 || isSubmitting}
               >
                 Anterior
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setCurrentSection(Math.min(sections.length - 1, currentSection + 1))}
-                disabled={currentSection === sections.length - 1}
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setCurrentSection(Math.min(sections.length - 1, currentSection + 1))
+                }}
+                disabled={currentSection === sections.length - 1 || isSubmitting}
               >
                 Siguiente
               </Button>
@@ -486,15 +496,24 @@ export function MaintenanceChecklistExecution({ workOrderId }: MaintenanceCheckl
           )}
         </CardContent>
         <CardFooter className="flex justify-between">
-          <Button 
-            variant="outline" 
-            onClick={() => router.push(`/ordenes/${workOrderId}`)}
+          <Button
+            variant="outline"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              router.push(`/ordenes/${workOrderId}`)
+            }}
+            disabled={isSubmitting}
           >
             Cancelar
           </Button>
           {currentSection === sections.length - 1 && (
-            <Button 
-              onClick={handleSubmit} 
+            <Button
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                handleSubmit()
+              }}
               disabled={!isChecklistComplete() || isSubmitting}
             >
               {isSubmitting ? (

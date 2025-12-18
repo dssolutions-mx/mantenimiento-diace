@@ -1,0 +1,222 @@
+{
+  "completedModels": [
+    "T800 Water Truck",
+    "INT-7600-ISM-320",
+    "INT-WORKSTAR 7600-310",
+    "KENWORTH-T460",
+    "C7H 360HP 6X4 (AUTOMATICO)",
+    "SIT-C7H-LONG CHASIS",
+    "C7H 360HP 6X4 (MANUAL)",
+    "CARGADOR FRONTAL 524 P",
+    "CARGADOR FRONTAL 524K",
+    "CARGADOR FRONTAL 524K II",
+    "INT- 7600SBA 6X4",
+    "INTERNATIONAL-TRACTOCAMION-LONG CHASIS",
+    "BOM-PUTZMEISTER"
+  ],
+  "stats": {
+    "totalModels": 13,
+    "totalTasksFound": 3528,
+    "totalTasksMigrated": 3457,
+    "totalTasksSkipped": 71,
+    "totalErrors": 4
+  },
+  "modelStats": {
+    "T800 Water Truck": {
+      "tasksFound": 955,
+      "tasksMigrated": 906,
+      "tasksSkipped": 49,
+      "errors": 0,
+      "skippedReasons": [
+        "Duplicate task: Muestra de aceite del motor (Prueba)",
+        "Duplicate task: Inspección de correas y mangueras (Inspección)",
+        "Duplicate task: Lubricación del chasis (Lubricación)",
+        "Duplicate task: Inspección de frenos (Inspección)",
+        "Duplicate task: CAMBIO DE ACEITE Y FILTRO DE MOTOR (vocacional/severo) (Reemplazo)",
+        "Duplicate task: Cambio de filtro de combustible primario (Reemplazo)",
+        "Duplicate task: Lubricación de chasis y puntos de articulación (Lubricación)",
+        "Duplicate task: Inspección de sistema de frenos (Inspección)",
+        "Duplicate task: Drenar tanques de aire (Limpieza)",
+        "Duplicate task: Muestra de aceite del motor (Prueba)",
+        "Duplicate task: Inspección de correas y mangueras (Inspección)",
+        "Duplicate task: Lubricación del chasis (Lubricación)",
+        "Duplicate task: Inspección de frenos (Inspección)",
+        "Duplicate task: CAMBIO DE ACEITE Y FILTRO DE MOTOR (aplicaciones vocacionales <6 MPG) (Reemplazo)",
+        "Duplicate task: Cambio de filtro de combustible (Reemplazo)",
+        "Duplicate task: Inspección de sistema de enfriamiento (Inspección)",
+        "Duplicate task: Muestra de líquido de transmisión (Prueba)",
+        "Duplicate task: Lubricación de chasis y puntos de articulación (Lubricación)",
+        "Duplicate task: Lubricación del chasis (Lubricación)",
+        "Duplicate task: CAMBIO DE ACEITE Y FILTRO DE MOTOR (vocacional/severo) (Reemplazo)",
+        "Duplicate task: Inspección de correas y mangueras (Inspección)",
+        "Duplicate task: Inspección de sistema de frenos (Inspección)",
+        "Duplicate task: Cambio de filtro de combustible primario (Reemplazo)",
+        "Duplicate task: Muestra de aceite del motor (Prueba)",
+        "Duplicate task: Inspección de frenos (Inspección)",
+        "Duplicate task: Drenar tanques de aire (Limpieza)",
+        "Duplicate task: Cambio de filtro de aire del motor (Reemplazo)",
+        "Duplicate task: Inspección completa de sistema de frenos (Inspección)",
+        "Duplicate task: Muestra de aceite de transmisión y diferenciales (Prueba)",
+        "Duplicate task: Inspección de suspensión (Inspección)",
+        "Duplicate task: Reemplazo de filtro del tanque de combustible (Reemplazo)",
+        "Duplicate task: Lubricación del chasis (Lubricación)",
+        "Duplicate task: Inspección de frenos (Inspección)",
+        "Duplicate task: Drenar tanques de aire (Limpieza)",
+        "Duplicate task: Muestra de aceite del motor (Prueba)",
+        "Duplicate task: Inspección de correas y mangueras (Inspección)",
+        "Duplicate task: Lubricación de chasis y puntos de articulación (Lubricación)",
+        "Duplicate task: Cambio de filtro de combustible primario (Reemplazo)",
+        "Duplicate task: CAMBIO DE ACEITE Y FILTRO DE MOTOR (vocacional/severo) (Reemplazo)",
+        "Duplicate task: Inspección de sistema de frenos (Inspección)",
+        "Duplicate task: Inspección de sistema de frenos (Inspección)",
+        "Duplicate task: Inspección de correas y mangueras (Inspección)",
+        "Duplicate task: Inspección de frenos (Inspección)",
+        "Duplicate task: Muestra de aceite del motor (Prueba)",
+        "Duplicate task: Cambio de filtro de combustible primario (Reemplazo)",
+        "Duplicate task: Lubricación del chasis (Lubricación)",
+        "Duplicate task: Lubricación de chasis y puntos de articulación (Lubricación)",
+        "Duplicate task: Drenar tanques de aire (Limpieza)",
+        "Duplicate task: CAMBIO DE ACEITE Y FILTRO DE MOTOR (vocacional/severo) (Reemplazo)"
+      ]
+    },
+    "INT-7600-ISM-320": {
+      "tasksFound": 0,
+      "tasksMigrated": 0,
+      "tasksSkipped": 0,
+      "errors": 1,
+      "skippedReasons": [
+        "Model not found in destination: INT-7600-ISM-320"
+      ]
+    },
+    "INT-WORKSTAR 7600-310": {
+      "tasksFound": 0,
+      "tasksMigrated": 0,
+      "tasksSkipped": 0,
+      "errors": 1,
+      "skippedReasons": [
+        "Model not found in destination: INT-WORKSTAR 7600-310"
+      ]
+    },
+    "KENWORTH-T460": {
+      "tasksFound": 636,
+      "tasksMigrated": 636,
+      "tasksSkipped": 0,
+      "errors": 0,
+      "skippedReasons": []
+    },
+    "C7H 360HP 6X4 (AUTOMATICO)": {
+      "tasksFound": 371,
+      "tasksMigrated": 371,
+      "tasksSkipped": 0,
+      "errors": 0,
+      "skippedReasons": []
+    },
+    "SIT-C7H-LONG CHASIS": {
+      "tasksFound": 376,
+      "tasksMigrated": 376,
+      "tasksSkipped": 0,
+      "errors": 0,
+      "skippedReasons": []
+    },
+    "C7H 360HP 6X4 (MANUAL)": {
+      "tasksFound": 340,
+      "tasksMigrated": 340,
+      "tasksSkipped": 0,
+      "errors": 0,
+      "skippedReasons": []
+    },
+    "CARGADOR FRONTAL 524 P": {
+      "tasksFound": 265,
+      "tasksMigrated": 265,
+      "tasksSkipped": 0,
+      "errors": 0,
+      "skippedReasons": []
+    },
+    "CARGADOR FRONTAL 524K": {
+      "tasksFound": 190,
+      "tasksMigrated": 168,
+      "tasksSkipped": 22,
+      "errors": 0,
+      "skippedReasons": [
+        "Duplicate task: MUESTRE DE ACEITE DE MOTOR  (Inspección)",
+        "Duplicate task: REVISION DE NIVEL DE ACEITE DEL EJE SELANTERO Y TRASERO  (Inspección)",
+        "Duplicate task: LUBRICACION DE LAS JUNTAS DESLIZANTES SUPERIOR E INFERIOR DE LA LINEA DE TRASMISION Y DE LAS JUNTAS INFERIORES (FILTRO DE RESPIRADERO DEL DEPOSITO HIDRAULICO ) (Inspección)",
+        "Duplicate task: REVISION DE NIVEL DE ELECTROLITO DE BATERIA DE BORNES  (Inspección)",
+        "Duplicate task: LUBRICACION DE RETENES DEL EJE DELANTERO Y EJE TRASERO (LUBRICACION) (Inspección)",
+        "Duplicate task: REVISION DE NIVEL DE ACEITE DEL EJE SELANTERO Y TRASERO  (Inspección)",
+        "Duplicate task: SUSTITUCION DE FILTRO COMBUSTIBLE AUXILIAR  (Reemplazo)",
+        "Duplicate task: REVISION DE LAS MANGUERAS DE ADMISION Y AIRE Y DE LOS ACOPLAMIENTOS DEL TUBO DE ENFRIADOR DE CARGA (MUESTREO DE REFRIGERANTE DE MOTOR ) (Inspección)",
+        "Duplicate task: SUSTITUCION FILTRO DE COMBUSTIBLE PRIMARIO  (Reemplazo)",
+        "Duplicate task: SUSTITUCION DE TAMIZ DE COMBUSTIBLE EN LINEA  (Inspección)",
+        "Duplicate task: LUBRICACION DE LAS JUNTAS DESLIZANTES SUPERIOR E INFERIOR DE LA LINEA DE TRASMISION Y DE LAS JUNTAS INFERIORES (FILTRO DE RESPIRADERO DEL DEPOSITO HIDRAULICO ) (Inspección)",
+        "Duplicate task: REVISION DE LAS MANGUERAS DE ADMISION Y AIRE Y DE LOS ACOPLAMIENTOS DEL TUBO DE ENFRIADOR DE CARGA (MUESTREO DE REFRIGERANTE DE MOTOR ) (Inspección)",
+        "Duplicate task: CAMBIO DE ACEITE DE MOTOR Y SUSTITUCION DE FILTRO \n (Inspección)",
+        "Duplicate task: SUSTITUCION DE FILTRO DE COMBUSTIBLE FINAL  (Reemplazo)",
+        "Duplicate task: LUBRICACION DE RETENES DEL EJE DELANTERO Y EJE TRASERO (LUBRICACION) (Inspección)",
+        "Duplicate task: SUSTITUCION DE TAMIZ DE COMBUSTIBLE EN LINEA  (Inspección)",
+        "Duplicate task: ENGRASADO GENERAL  (Lubricación)",
+        "Duplicate task: FILTRO DE AIRE PRIMARIO  (Reemplazo)",
+        "Duplicate task: FILTRO AIRE SECUNDARIO  (Reemplazo)",
+        "Duplicate task: CAMBIO DE ACEITE DE MOTOR Y SUSTITUCION DE FILTRO \n (Reemplazo)",
+        "Duplicate task: SUSTITUCION DE FILTRO DE COMBUSTIBLE FINAL  (Reemplazo)",
+        "Duplicate task: SUSTITUCION FILTRO DE COMBUSTIBLE PRIMARIO  (Reemplazo)"
+      ]
+    },
+    "CARGADOR FRONTAL 524K II": {
+      "tasksFound": 190,
+      "tasksMigrated": 190,
+      "tasksSkipped": 0,
+      "errors": 0,
+      "skippedReasons": []
+    },
+    "INT- 7600SBA 6X4": {
+      "tasksFound": 205,
+      "tasksMigrated": 205,
+      "tasksSkipped": 0,
+      "errors": 0,
+      "skippedReasons": []
+    },
+    "INTERNATIONAL-TRACTOCAMION-LONG CHASIS": {
+      "tasksFound": 0,
+      "tasksMigrated": 0,
+      "tasksSkipped": 0,
+      "errors": 1,
+      "skippedReasons": [
+        "Model not found in destination: INTERNATIONAL-TRACTOCAMION-LONG CHASIS"
+      ]
+    },
+    "BOM-PUTZMEISTER": {
+      "tasksFound": 0,
+      "tasksMigrated": 0,
+      "tasksSkipped": 0,
+      "errors": 1,
+      "skippedReasons": [
+        "Model not found in destination: BOM-PUTZMEISTER"
+      ]
+    }
+  },
+  "errors": [
+    {
+      "model": "INT-7600-ISM-320",
+      "error": "Model not found in destination: INT-7600-ISM-320",
+      "timestamp": "2025-12-18T19:19:34.610Z"
+    },
+    {
+      "model": "INT-WORKSTAR 7600-310",
+      "error": "Model not found in destination: INT-WORKSTAR 7600-310",
+      "timestamp": "2025-12-18T19:19:34.807Z"
+    },
+    {
+      "model": "INTERNATIONAL-TRACTOCAMION-LONG CHASIS",
+      "error": "Model not found in destination: INTERNATIONAL-TRACTOCAMION-LONG CHASIS",
+      "timestamp": "2025-12-18T19:26:01.351Z"
+    },
+    {
+      "model": "BOM-PUTZMEISTER",
+      "error": "Model not found in destination: BOM-PUTZMEISTER",
+      "timestamp": "2025-12-18T19:26:01.472Z"
+    }
+  ],
+  "startedAt": "2025-12-18T19:17:28.352Z",
+  "lastUpdatedAt": "2025-12-18T19:26:01.472Z"
+}

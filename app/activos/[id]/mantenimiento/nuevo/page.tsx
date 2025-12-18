@@ -144,8 +144,59 @@ export default function NewMaintenancePage({ params }: NewMaintenancePageProps) 
         setLoading(true);
         const supabase = createClient();
         
-        // Obtener el plan de mantenimiento
-        const { data: planData, error: planError } = await supabase
+        // Try to get as maintenance_plan first
+        const { data: planRecord, error: planRecordError } = await supabase
+          .from("maintenance_plans")
+          .select("id, interval_id, name, description, interval_value")
+          .eq("id", planId)
+          .maybeSingle();
+        
+        let intervalId: string;
+        let actualPlanId: string | null = null;
+        
+        if (planRecord && !planRecordError) {
+          // It's a real maintenance_plan
+          intervalId = planRecord.interval_id;
+          actualPlanId = planRecord.id;
+          console.log("Found maintenance_plan:", { planId: planRecord.id, intervalId });
+        } else {
+          // It might be an interval_id directly - try to get the interval
+          console.log("planId is not a maintenance_plan, trying as interval_id:", planId);
+          const { data: intervalCheck, error: intervalCheckError } = await supabase
+            .from("maintenance_intervals")
+            .select("id")
+            .eq("id", planId)
+            .maybeSingle();
+          
+          if (intervalCheck && !intervalCheckError) {
+            // It's an interval_id, find the associated plan for this asset
+            intervalId = planId;
+            console.log("Found interval_id, looking for associated plan:", { intervalId, assetId });
+            const { data: associatedPlan } = await supabase
+              .from("maintenance_plans")
+              .select("id")
+              .eq("interval_id", planId)
+              .eq("asset_id", assetId)
+              .maybeSingle();
+            
+            if (associatedPlan) {
+              actualPlanId = associatedPlan.id;
+              console.log("Found associated plan:", actualPlanId);
+            } else {
+              console.log("No associated plan found, will use interval_id directly");
+            }
+          } else {
+            console.error("planId is neither a maintenance_plan nor an interval:", {
+              planId,
+              planRecordError,
+              intervalCheckError
+            });
+            throw new Error(`No se encontró ni un plan de mantenimiento ni un intervalo con el ID: ${planId}`);
+          }
+        }
+        
+        // Get the maintenance interval with its tasks
+        const { data: intervalData, error: intervalError } = await supabase
           .from("maintenance_intervals")
           .select(`
             *,
@@ -154,71 +205,95 @@ export default function NewMaintenancePage({ params }: NewMaintenancePageProps) 
               task_parts(*)
             )
           `)
-          .eq("id", planId)
+          .eq("id", intervalId)
           .single();
           
-        if (planError) throw planError;
+        if (intervalError) throw intervalError;
+        if (!intervalData) {
+          throw new Error("Intervalo de mantenimiento no encontrado");
+        }
+        
+        // Combine plan and interval data
+        const planData = {
+          ...intervalData,
+          plan_id: actualPlanId,
+          plan_name: planRecord?.name || intervalData.name,
+          plan_description: planRecord?.description || intervalData.description,
+          interval_value: planRecord?.interval_value || intervalData.interval_value
+        };
+        
+        console.log("Loaded maintenance plan with tasks:", {
+          providedPlanId: planId,
+          actualPlanId: actualPlanId,
+          intervalId: intervalId,
+          tasksCount: planData.maintenance_tasks?.length || 0
+        });
         
         setMaintenancePlan(planData);
         
-        // Obtener el último mantenimiento de este tipo
-        const { data: lastMaintenanceData, error: historyError } = await supabase
-          .from("maintenance_history")
-          .select("*")
-          .eq("maintenance_plan_id", planId)
-          .eq("asset_id", assetId)
-          .order("date", { ascending: false })
-          .limit(1);
+        // Obtener el último mantenimiento de este tipo (use actualPlanId if available)
+        // Only query history if we have an actual plan ID
+        if (actualPlanId) {
+          const { data: lastMaintenanceData, error: historyError } = await supabase
+            .from("maintenance_history")
+            .select("*")
+            .eq("maintenance_plan_id", actualPlanId)
+            .eq("asset_id", assetId)
+            .order("date", { ascending: false })
+            .limit(1);
+            
+          if (historyError) {
+            console.error("Error al cargar el último mantenimiento:", historyError);
+            // No lanzar error, continuar con el flujo
+          }
           
-        if (historyError) {
-          console.error("Error al cargar el último mantenimiento:", historyError);
-          // No lanzar error, continuar con el flujo
-        }
-        
-        // Calcular el estado del mantenimiento
-        if (planData && asset) {
-          // Get maintenance unit from asset model
-          const maintenanceUnit = (asset as any).equipment_models?.maintenance_unit || 
-                                  (asset as any).model?.maintenance_unit || 
-                                  'hours';
-          const isKilometers = maintenanceUnit === 'kilometers' || maintenanceUnit === 'kilometres';
-          
+          // Continue with the rest of the logic using lastMaintenanceData
           const lastMaintenance = lastMaintenanceData && lastMaintenanceData.length > 0 ? lastMaintenanceData[0] : null;
-          let lastMaintenanceValue = 0;
-          let lastMaintenanceDate = asset.last_maintenance_date;
           
-          if (lastMaintenance) {
-            lastMaintenanceValue = isKilometers 
-              ? Number(lastMaintenance.kilometers) || 0 
-              : Number(lastMaintenance.hours) || 0;
-            lastMaintenanceDate = lastMaintenance.date;
+          // Calcular el estado del mantenimiento
+          if (planData && asset) {
+            // Get maintenance unit from asset model
+            const maintenanceUnit = (asset as any).equipment_models?.maintenance_unit || 
+                                    (asset as any).model?.maintenance_unit || 
+                                    'hours';
+            const isKilometers = maintenanceUnit === 'kilometers' || maintenanceUnit === 'kilometres';
+            
+            let lastMaintenanceValue = 0;
+            let lastMaintenanceDate = asset.last_maintenance_date;
+            
+            if (lastMaintenance) {
+              lastMaintenanceValue = isKilometers 
+                ? Number(lastMaintenance.kilometers) || 0 
+                : Number(lastMaintenance.hours) || 0;
+              lastMaintenanceDate = lastMaintenance.date;
+            }
+            
+            // Calcular próximo mantenimiento por valor (horas o kilómetros)
+            const interval = planData.interval_value || 0;
+            const nextValue = lastMaintenanceValue + interval;
+            
+            // Calcular si está pendiente o vencido
+            const currentValue = isKilometers 
+              ? (asset.current_kilometers || 0) 
+              : (asset.current_hours || 0);
+            const valueOverdue = currentValue - nextValue;
+            const isOverdue = valueOverdue >= 0;
+            
+            // Calcular el progreso
+            let progress = 0;
+            if (currentValue && lastMaintenanceValue && interval > 0) {
+              const valueDiff = currentValue - lastMaintenanceValue;
+              progress = Math.min(Math.round((valueDiff / interval) * 100), 100);
+            }
+            
+            setMaintenanceStatus({
+              isOverdue: isOverdue,
+              isPending: progress >= 90,
+              hoursOverdue: isOverdue ? valueOverdue : undefined,
+              progress,
+              lastMaintenanceDate: lastMaintenanceDate || undefined
+            });
           }
-          
-          // Calcular próximo mantenimiento por valor (horas o kilómetros)
-          const interval = planData.interval_value || 0;
-          const nextValue = lastMaintenanceValue + interval;
-          
-          // Calcular si está pendiente o vencido
-          const currentValue = isKilometers 
-            ? (asset.current_kilometers || 0) 
-            : (asset.current_hours || 0);
-          const valueOverdue = currentValue - nextValue;
-          const isOverdue = valueOverdue >= 0;
-          
-          // Calcular el progreso
-          let progress = 0;
-          if (currentValue && lastMaintenanceValue && interval > 0) {
-            const valueDiff = currentValue - lastMaintenanceValue;
-            progress = Math.min(Math.round((valueDiff / interval) * 100), 100);
-          }
-          
-          setMaintenanceStatus({
-            isOverdue: isOverdue,
-            isPending: progress >= 90,
-            hoursOverdue: isOverdue ? valueOverdue : undefined,
-            progress,
-            lastMaintenanceDate: lastMaintenanceDate || undefined
-          });
         }
         
         // Pre-rellenar campos basados en el plan
@@ -346,7 +421,7 @@ export default function NewMaintenancePage({ params }: NewMaintenancePageProps) 
         estimated_duration: estimatedDuration ? Number(estimatedDuration) : 0,
         priority: priority,
         status: 'Pendiente',
-        maintenance_plan_id: planId || null,
+        maintenance_plan_id: (maintenancePlan as any)?.plan_id || planId || null,
         estimated_cost: estimatedTotalCost ? Number(estimatedTotalCost) : 0,
         creation_photos: planningDocuments.length > 0 ? planningDocuments.map(doc => ({
           url: doc.url,
@@ -396,7 +471,14 @@ export default function NewMaintenancePage({ params }: NewMaintenancePageProps) 
             cost: part.cost ? Number(part.cost) : undefined
           }))
         }));
+        console.log(`Adding ${tasksData.length} tasks to work order ${workOrderResult.order_id}`, tasksData);
         updateData.required_tasks = tasksData;
+      } else {
+        console.warn("No tasks found to add to work order", {
+          planId,
+          hasMaintenancePlan: !!maintenancePlan,
+          tasksCount: maintenancePlan?.maintenance_tasks?.length || 0
+        });
       }
 
       // Update work order with parts and/or tasks if available
@@ -760,6 +842,77 @@ export default function NewMaintenancePage({ params }: NewMaintenancePageProps) 
             </div>
           </CardContent>
         </Card>
+        
+        {/* Maintenance Tasks Section */}
+        {maintenancePlan && maintenancePlan.maintenance_tasks && maintenancePlan.maintenance_tasks.length > 0 && (
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ClipboardList className="h-5 w-5" />
+                Tareas de Mantenimiento
+              </CardTitle>
+              <CardDescription>
+                Las siguientes tareas serán incluidas en la orden de trabajo. Estas tareas deberán ser completadas durante el mantenimiento.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {maintenancePlan.maintenance_tasks.map((task: MaintenanceTask, index: number) => (
+                  <div key={task.id} className="border rounded-lg p-4 space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-sm font-medium text-muted-foreground">Tarea {index + 1}</span>
+                          {task.type && (
+                            <Badge variant="secondary" className="text-xs">
+                              {task.type}
+                            </Badge>
+                          )}
+                          {task.requires_specialist && (
+                            <Badge variant="outline" className="text-xs">
+                              Requiere Especialista
+                            </Badge>
+                          )}
+                        </div>
+                        <h4 className="text-sm font-medium mb-1">{task.description}</h4>
+                        {task.estimated_time && (
+                          <p className="text-xs text-muted-foreground">
+                            Tiempo estimado: {task.estimated_time} horas
+                          </p>
+                        )}
+                        {task.task_parts && task.task_parts.length > 0 && (
+                          <div className="mt-2">
+                            <p className="text-xs font-medium text-muted-foreground mb-1">
+                              Repuestos requeridos para esta tarea:
+                            </p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs text-muted-foreground pl-2">
+                              {task.task_parts.map((part: TaskPart, partIdx: number) => (
+                                <div key={partIdx} className="flex items-center gap-2">
+                                  <span>• {part.name}</span>
+                                  {part.part_number && (
+                                    <span className="text-muted-foreground/70">
+                                      ({part.part_number})
+                                    </span>
+                                  )}
+                                  <span className="font-medium">x{part.quantity}</span>
+                                  {part.cost && (
+                                    <span className="text-muted-foreground/70">
+                                      ${Number(part.cost).toFixed(2)}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
         
         <Card className="mt-6">
           <CardHeader>

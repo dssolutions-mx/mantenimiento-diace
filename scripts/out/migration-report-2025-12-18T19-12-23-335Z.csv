@@ -1,0 +1,21 @@
+Model,Tasks Found,Tasks Migrated,Tasks Skipped,Errors,Status
+T800 Water Truck,0,0,0,0,Pending
+INT-7600-ISM-320,0,0,0,0,Pending
+INT-WORKSTAR 7600-310,0,0,0,0,Pending
+KENWORTH-T460,0,0,0,0,Pending
+C7H 360HP 6X4 (AUTOMATICO),0,0,0,0,Pending
+SIT-C7H-LONG CHASIS,0,0,0,0,Pending
+C7H 360HP 6X4 (MANUAL),0,0,0,0,Pending
+CARGADOR FRONTAL 524 P,0,0,0,0,Pending
+CARGADOR FRONTAL 524K,0,0,0,0,Pending
+CARGADOR FRONTAL 524K II,0,0,0,0,Pending
+INT- 7600SBA 6X4,0,0,0,0,Pending
+INTERNATIONAL-TRACTOCAMION-LONG CHASIS,0,0,0,0,Pending
+BOM-PUTZMEISTER,0,0,0,1,Completed
+
+Summary
+Total Models,1
+Total Tasks Found,0
+Total Tasks Migrated,0
+Total Tasks Skipped,0
+Total Errors,1

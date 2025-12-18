@@ -13,6 +13,7 @@ interface WorkOrderPrintDocumentProps {
   profiles?: Record<string, any>
   requiredParts?: any[]
   totalPartsCost?: number
+  requiredTasks?: any[]
 }
 
 export function WorkOrderPrintDocument({
@@ -21,7 +22,8 @@ export function WorkOrderPrintDocument({
   purchaseOrders = [],
   profiles = {},
   requiredParts = [],
-  totalPartsCost = 0
+  totalPartsCost = 0,
+  requiredTasks = []
 }: WorkOrderPrintDocumentProps) {
   const router = useRouter()
   
@@ -432,6 +434,47 @@ export function WorkOrderPrintDocument({
                     )}
                   </tr>
                 )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Required Tasks Section */}
+        {requiredTasks.length > 0 && (
+          <div className="print-section">
+            <div className="print-section-title">Tareas de Mantenimiento</div>
+            <table className="print-table">
+              <thead>
+                <tr>
+                  <th style={{ width: '5%' }}>#</th>
+                  <th style={{ width: '50%' }}>Descripción</th>
+                  <th style={{ width: '15%' }}>Tipo</th>
+                  <th style={{ width: '10%' }}>Tiempo Est.</th>
+                  <th style={{ width: '20%' }}>Repuestos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requiredTasks.map((task: any, index: number) => (
+                  <tr key={task.id || index}>
+                    <td className="text-center">{index + 1}</td>
+                    <td>{task.description || 'N/A'}</td>
+                    <td>{task.type || 'N/A'}</td>
+                    <td className="text-center">{task.estimated_time ? `${task.estimated_time} hrs` : 'N/A'}</td>
+                    <td>
+                      {task.parts && task.parts.length > 0 ? (
+                        <div style={{ fontSize: '7pt' }}>
+                          {task.parts.map((part: any, idx: number) => (
+                            <div key={idx}>
+                              • {part.name} {part.part_number ? `(${part.part_number})` : ''} x{part.quantity}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        'N/A'
+                      )}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

@@ -234,10 +234,12 @@ export function WorkOrdersList() {
       setIsLoading(true)
       const supabase = createClient()
       
-      // Load technicians
+      // Load technicians - only active ones and limit fields
       const { data: techData, error: techError } = await supabase
         .from("profiles")
-        .select("*")
+        .select("id, nombre, apellido")
+        .eq("is_active", true)
+        .limit(500) // Reasonable limit
       
       if (techError) {
         console.error("Error al cargar técnicos:", techError)
@@ -249,7 +251,7 @@ export function WorkOrdersList() {
         setTechnicians(techMap)
       }
       
-      // Load work orders
+      // Load work orders with pagination
       const { data, error } = await supabase
         .from("work_orders")
         .select(`
@@ -261,6 +263,7 @@ export function WorkOrdersList() {
           )
         `)
         .order("created_at", { ascending: false })
+        .limit(100) // Limit to prevent slow loads
 
       if (error) {
         console.error("Error al cargar órdenes de trabajo:", error)

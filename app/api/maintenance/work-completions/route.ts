@@ -72,7 +72,8 @@ export async function POST(request: Request) {
       workOrderId,
       completionData,
       maintenanceHistoryData,
-      additionalExpenses
+      additionalExpenses,
+      checklist_completion
     } = data
 
     console.log("API recibió los siguientes datos:", JSON.stringify({
@@ -309,6 +310,35 @@ export async function POST(request: Request) {
         // We don't fail the entire process if history update fails
       } else {
         maintenanceHistoryId = historyData?.id;
+      }
+    }
+
+    // Save checklist completion if provided
+    if (checklist_completion) {
+      try {
+        // @ts-ignore - Table created in recent migration
+        const { error: checklistError } = await supabase
+          .from('maintenance_checklists')
+          .upsert({
+            ...checklist_completion,
+            updated_at: new Date().toISOString()
+          }, {
+            onConflict: 'work_order_id'
+          })
+
+        if (checklistError) {
+          console.error("Error al guardar checklist de mantenimiento:", checklistError)
+          // Don't fail the entire process if checklist save fails
+        } else {
+          // Update work order to mark checklist as completed
+          await supabase
+            .from('work_orders')
+            .update({ preventive_checklist_completed: true })
+            .eq('id', workOrderId)
+        }
+      } catch (checklistErr) {
+        console.error("Error procesando checklist:", checklistErr)
+        // Don't fail the entire process
       }
     }
 

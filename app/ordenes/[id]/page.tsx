@@ -15,7 +15,7 @@ import Link from "next/link"
 import { cn } from "@/lib/utils"
 import { 
   ArrowLeft, ShoppingCart, CalendarCheck, CheckCircle, Edit, Clock, 
-  User, Wrench, Plus, CalendarDays, ChevronDown, Camera, FileText, ClipboardCheck 
+  User, Wrench, Plus, CalendarDays, ChevronDown, Camera, FileText
 } from "lucide-react"
 import { 
   MaintenanceType, 
@@ -942,14 +942,6 @@ export default async function WorkOrderDetailsPage({
                 <Link href={`/ordenes/${id}/editar`}>
                   <Edit className="mr-2 h-4 w-4" />
                   Editar
-                </Link>
-              </Button>
-
-              {/* Direct access to maintenance checklist execution for this OT */}
-              <Button variant="outline" asChild className="w-full">
-                <Link href={`/checklists/mantenimiento/${id}`}>
-                  <ClipboardCheck className="mr-2 h-4 w-4" />
-                  Checklist de mantenimiento
                 </Link>
               </Button>
               

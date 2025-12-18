@@ -308,22 +308,7 @@ export function WorkOrdersList() {
       setIsLoading(true)
       const supabase = createClient()
       
-      // Load technicians
-      const { data: techData, error: techError } = await supabase
-        .from("profiles")
-        .select("*")
-      
-      if (techError) {
-        console.error("Error al cargar técnicos:", techError)
-      } else if (techData) {
-        const techMap: Record<string, Profile> = {}
-        techData.forEach(tech => {
-          techMap[tech.id] = tech
-        })
-        setTechnicians(techMap)
-      }
-      
-      // Load work orders
+      // Load work orders with pagination first
       const { data, error } = await supabase
         .from("work_orders")
         .select(`
@@ -335,6 +320,7 @@ export function WorkOrdersList() {
           )
         `)
         .order("created_at", { ascending: false })
+        .limit(100) // Limit to prevent slow loads
 
       if (error) {
         console.error("Error al cargar órdenes de trabajo:", error)
@@ -342,6 +328,53 @@ export function WorkOrdersList() {
       }
 
       setWorkOrders(data as WorkOrderWithAsset[])
+      
+      // Get unique technician IDs from work orders
+      const assignedIds = data
+        .filter(order => order.assigned_to)
+        .map(order => order.assigned_to as string)
+      const uniqueAssignedIds = [...new Set(assignedIds)]
+      
+      console.log(`Work orders have ${uniqueAssignedIds.length} unique assigned technician IDs:`, uniqueAssignedIds.slice(0, 5))
+      
+      // Load technicians - load all active ones, plus any assigned to work orders (even if inactive)
+      const techMap: Record<string, Profile> = {}
+      
+      // First, load all active technicians
+      const { data: activeTechs, error: activeTechError } = await supabase
+        .from("profiles")
+        .select("id, nombre, apellido")
+        .eq("is_active", true)
+        .limit(500)
+      
+      if (!activeTechError && activeTechs) {
+        activeTechs.forEach(tech => {
+          techMap[tech.id] = tech
+        })
+      }
+      
+      // Then, load any assigned technicians that might not be active
+      if (uniqueAssignedIds.length > 0) {
+        const { data: assignedTechs, error: assignedTechError } = await supabase
+          .from("profiles")
+          .select("id, nombre, apellido")
+          .in("id", uniqueAssignedIds)
+        
+        if (!assignedTechError && assignedTechs) {
+          assignedTechs.forEach(tech => {
+            techMap[tech.id] = tech
+          })
+        }
+      }
+      
+      const techData = Object.values(techMap)
+      
+      console.log(`Loaded ${techData.length} technicians`, { 
+        sample: Object.keys(techMap).slice(0, 3),
+        assignedIds: uniqueAssignedIds.slice(0, 3),
+        foundAssigned: uniqueAssignedIds.filter(id => techMap[id]).length
+      })
+      setTechnicians(techMap)
 
       // Load purchase order statuses
       const poIds = data
@@ -415,7 +448,10 @@ export function WorkOrdersList() {
   const getTechnicianName = (techId: string | null) => {
     if (!techId) return 'No asignado'
     const tech = technicians[techId]
-    if (!tech) return techId
+    if (!tech) {
+      console.warn(`Technician not found for ID: ${techId}`, { techniciansCount: Object.keys(technicians).length, sampleIds: Object.keys(technicians).slice(0, 3) })
+      return techId
+    }
     return tech.nombre && tech.apellido 
       ? `${tech.nombre} ${tech.apellido}`
       : tech.nombre || techId
